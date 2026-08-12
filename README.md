@@ -21,7 +21,7 @@ agent means you should be coming back.
 Install from GitHub:
 
 ```
-herdr plugin install <owner>/agent-keep-awake
+herdr plugin install happyeric77/agent-keep-awake
 ```
 
 Or link a local checkout while developing:
