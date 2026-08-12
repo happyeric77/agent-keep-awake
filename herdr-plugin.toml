@@ -1,0 +1,24 @@
+id = "herdr.keep-awake"
+name = "Keep Awake"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Prevent macOS from sleeping while a Herdr agent is working."
+platforms = ["macos"]
+
+[[startup]]
+command = ["node", "start.mjs"]
+
+[[actions]]
+id = "toggle"
+title = "Toggle keep awake"
+command = ["node", "toggle.mjs"]
+
+[[actions]]
+id = "enable"
+title = "Enable keep awake"
+command = ["node", "toggle.mjs", "on"]
+
+[[actions]]
+id = "disable"
+title = "Disable keep awake"
+command = ["node", "toggle.mjs", "off"]
