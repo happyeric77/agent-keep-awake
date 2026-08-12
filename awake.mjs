@@ -7,7 +7,11 @@ export function ensureAwake(on) {
     if (caffeinateProcess && caffeinateProcess.exitCode === null) {
       return;
     }
-    caffeinateProcess = spawn("caffeinate", ["-i", "-s", "-w", String(process.pid)], {
+    const args = ["-i", "-s"];
+    if (process.env.KEEP_AWAKE_DISPLAY !== "0") {
+      args.push("-d");
+    }
+    caffeinateProcess = spawn("caffeinate", [...args, "-w", String(process.pid)], {
       stdio: "ignore",
     });
     caffeinateProcess.on("error", (error) => {
