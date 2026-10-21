@@ -64,10 +64,131 @@ export function createTestDir(prefix, t) {
 export const writeJson = (p, data) => writeFileSync(p, JSON.stringify(data, null, 2), "utf8");
 export const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
 
-export const mockContext = (active = {}, directory = "/project") => ({
-  location: { directory },
-  session: { active: typeof active === "function" ? active : async () => active },
-});
+export function createMockOpenCodeContext(options = {}) {
+  const directory = options.directory ?? "/project";
+  const projectID = options.projectID ?? "proj-1";
+  const autoConnectEvent = options.autoConnectEvent ?? true;
+  const listeners = new Set();
+  let streamFail = options.streamFail ?? false;
+  let subscribeCount = 0;
+
+  const emit = (event) => {
+    for (const listener of listeners) {
+      listener(event);
+    }
+  };
+
+  const closeStream = () => {
+    for (const listener of listeners) {
+      listener(null, null, true);
+    }
+  };
+
+  const setStreamFail = (val) => {
+    streamFail = val;
+    if (val) {
+      for (const listener of listeners) {
+        listener(null, new Error("事件串流連線失敗"));
+      }
+    }
+  };
+
+  const context = {
+    location: { directory, project: { id: projectID } },
+    session: {
+      hook: () => ({ dispose: () => {} }),
+      get: async () => ({ id: "mock" }),
+    },
+    event: {
+      subscribe: (subOpts = {}) => {
+        subscribeCount += 1;
+        if (streamFail) {
+          throw new Error("事件串流連線失敗");
+        }
+        let queue = [];
+        let notify = null;
+        let closed = false;
+
+        if (autoConnectEvent) {
+          queue.push({
+            evt: { id: `evt_conn_${subscribeCount}`, type: "server.connected", created: Date.now(), data: {} },
+          });
+        }
+
+        const onEvent = (evt, err, isEof) => {
+          if (closed) return;
+          if (isEof) {
+            closed = true;
+            queue.push({ eof: true });
+          } else if (err) {
+            closed = true;
+            queue.push({ err });
+          } else {
+            queue.push({ evt });
+          }
+          if (notify) {
+            const cb = notify;
+            notify = null;
+            cb();
+          }
+        };
+
+        listeners.add(onEvent);
+
+        const signal = subOpts.signal;
+        const remove = () => {
+          if (closed) return;
+          closed = true;
+          listeners.delete(onEvent);
+          if (notify) {
+            const cb = notify;
+            notify = null;
+            cb();
+          }
+        };
+
+        if (signal) {
+          if (signal.aborted) {
+            remove();
+          } else {
+            signal.addEventListener("abort", remove, { once: true });
+          }
+        }
+
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              async next() {
+                while (queue.length === 0) {
+                  if (closed || signal?.aborted) {
+                    return { done: true, value: undefined };
+                  }
+                  await new Promise((resolve) => {
+                    notify = resolve;
+                  });
+                }
+                const item = queue.shift();
+                if (item.eof) {
+                  return { done: true, value: undefined };
+                }
+                if (item.err) {
+                  throw item.err;
+                }
+                return { done: false, value: item.evt };
+              },
+              async return() {
+                remove();
+                return { done: true, value: undefined };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+
+  return { context, emit, closeStream, setStreamFail, getSubscribeCount: () => subscribeCount };
+}
 
 export const mockSnapshot = (sessions = {}, overrides = {}) => ({
   id: "inst-1",
