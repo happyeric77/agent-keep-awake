@@ -143,7 +143,7 @@ delivery = "herdr"
 | `KEEP_AWAKE_POLL_INTERVAL` | `15` | 輪詢間隔（秒） |
 | `KEEP_AWAKE_DISPLAY` | `1` | 工作時是否同時保持螢幕開啟；設為 `0` 僅防止系統休眠（節省電量） |
 | `OPENCODE_KEEP_AWAKE_ENABLED` | `1` | 啟用 OpenCode 多 session 追蹤 |
-| `OPENCODE_HEARTBEAT_TIMEOUT` | `30` | OpenCode 行程清理的心跳逾時時間（秒） |
+| `OPENCODE_HEARTBEAT_TIMEOUT` | `30` | OpenCode 心跳逾時時間（秒）；逾期心跳將被忽略而不刪除檔案 |
 | `OPENCODE_STATE_DIR` | `~/.local/state/herdr-keep-awake/opencode` | OpenCode 狀態檔的明確共用目錄 |
 | `HERDR_TIMEOUT_MS` | `5000` | `herdr pane list` 的執行逾時上限（毫秒） |
 
@@ -157,7 +157,7 @@ node --test
 
 ### 測試範圍與限制
 
-- Node 測試套件涵蓋守護進程子行程生命週期、caffeinate 信號傳遞、行程存活檢查以及 OpenCode 狀態檔解析。
+- Node 測試套件涵蓋守護進程子行程生命週期、caffeinate 信號傳遞、行程存活檢查以及 OpenCode 狀態檔解析（共用輔助工具於 `tests/helpers.mjs`）。
 - **驗證限制：**
   - Retry/backoff 真實執行環境覆蓋尚未驗證（缺乏已安裝引擎的具體事證能證明 provider retry backoff 會維持活躍 drain 狀態）。
   - 真實外掛載入與 UI A 忙碌 B 閒置之驗收尚未執行。
@@ -165,6 +165,7 @@ node --test
 
 ## 限制事項
 
+- macOS 系統實際進入休眠之行為尚未進行實機實驗驗證（目前僅依據 caffeinate 命令列行為與信號管理進行驗證）。
 - 使用電池供電時，macOS 會忽略 `caffeinate -s`（系統休眠）——僅防止閒置休眠。此為 Apple 系統設計決策。
 - 無論是否執行 `caffeinate`，闔上筆記型電腦螢幕仍會強制休眠。
 - 守護進程檢查的是 Herdr 回報的 *agent status* 與 OpenCode session 狀態；若兩個系統皆未將 agent 視為活躍狀態，則無法察覺其進行中的工作。
