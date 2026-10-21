@@ -21,7 +21,7 @@ function atomicWriteJson(filePath, data) {
     try {
       unlinkSync(tmpPath);
     } catch {
-      // ignore
+      // 忽略錯誤
     }
   }
 }
@@ -53,7 +53,7 @@ export const plugin = {
     try {
       mkdirSync(stateDir, { recursive: true });
     } catch {
-      // ignore
+      // 忽略錯誤
     }
 
     const instanceId = opts.id ?? randomUUID();
@@ -81,7 +81,7 @@ export const plugin = {
       atomicWriteJson(stateFile, state);
     };
 
-    // Write initial instance state
+    // 寫入初始實例狀態
     writeCurrentState();
 
     const reconcileActive = async () => {
@@ -97,7 +97,7 @@ export const plugin = {
       const timeoutPromise = new Promise((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
-          reject(new Error("active request timed out"));
+          reject(new Error("active 請求逾時"));
         }, activeTimeoutMs);
         if (timer.unref) {
           timer.unref();
@@ -106,7 +106,7 @@ export const plugin = {
 
       const callPromise = Promise.resolve().then(() => ctx.session.active());
 
-      // Underlying in-flight lock remains held until actual settle
+      // 底層進行中鎖（in-flight lock）持續維持至實際 settle
       callPromise
         .finally(() => {
           inFlight = false;
@@ -119,7 +119,7 @@ export const plugin = {
         if (cleanedUp || timedOut) return;
 
         if (!isValidActiveMap(raw)) {
-          // Reject malformed/enveloped data without refreshing heartbeat or state
+          // 拒絕畸形或經包裝（enveloped）資料且不重新整理心跳或狀態
           return;
         }
 
@@ -133,11 +133,11 @@ export const plugin = {
         writeCurrentState();
       } catch {
         if (timer) clearTimeout(timer);
-        // Error or timeout: do NOT refresh heartbeat or state
+        // 發生錯誤或逾時：不重新整理心跳或狀態
       }
     };
 
-    // Initial authoritative snapshot reconciliation
+    // 初始權威快照協調
     await reconcileActive();
 
     const intervalTimer = setInterval(() => {
@@ -152,7 +152,7 @@ export const plugin = {
       try {
         unlinkSync(stateFile);
       } catch {
-        // ignore
+        // 忽略錯誤
       }
     };
 
@@ -166,7 +166,7 @@ export const plugin = {
       try {
         unlinkSync(stateFile);
       } catch {
-        // ignore
+        // 忽略錯誤
       }
     };
 

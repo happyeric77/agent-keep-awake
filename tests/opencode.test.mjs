@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getOpenCodeStatus, getOpenCodeStateDir } from "../opencode.mjs";
 
-test("getOpenCodeStatus: returns inactive when directory does not exist", () => {
+test("getOpenCodeStatus: 當目錄不存在時回傳非活躍狀態", () => {
   const nonExistentDir = join(tmpdir(), `test-opencode-none-${Date.now()}`);
   const status = getOpenCodeStatus({ opencodeDir: nonExistentDir });
   assert.equal(status.working, false);
@@ -13,7 +13,7 @@ test("getOpenCodeStatus: returns inactive when directory does not exist", () => 
   assert.equal(status.activeSessions.length, 0);
 });
 
-test("getOpenCodeStatus: handles A running B idle (idle deleted from state)", () => {
+test("getOpenCodeStatus: 處理 A running 與 B idle（idle 已自狀態中刪除）", () => {
   const dir = mkdtempSync(join(tmpdir(), "opencode-test-"));
   try {
     const file = join(dir, "inst-uuid-1.json");
@@ -38,7 +38,7 @@ test("getOpenCodeStatus: handles A running B idle (idle deleted from state)", ()
   }
 });
 
-test("getOpenCodeStatus: all idle (empty sessions) allows sleep", () => {
+test("getOpenCodeStatus: 全部 idle（空 sessions）允許休眠", () => {
   const dir = mkdtempSync(join(tmpdir(), "opencode-test-"));
   try {
     const file = join(dir, "inst-uuid-1.json");
@@ -60,7 +60,7 @@ test("getOpenCodeStatus: all idle (empty sessions) allows sleep", () => {
   }
 });
 
-test("getOpenCodeStatus: single-pass validation ignores crashed PID and stale heartbeat without unlinking", () => {
+test("getOpenCodeStatus: 單次驗證忽略崩潰 PID 與過期心跳且不刪除檔案", () => {
   const dir = mkdtempSync(join(tmpdir(), "opencode-test-"));
   try {
     const deadPid = 99999999;
@@ -93,10 +93,10 @@ test("getOpenCodeStatus: single-pass validation ignores crashed PID and stale he
     assert.equal(status.working, false);
     assert.equal(status.activeSessions.length, 0);
     assert.equal(status.instancesCount, 0);
-    // Retain files; plugin exit owns cleanup to prevent deleting replacements
-    assert.equal(existsSync(join(dir, "dead.json")), true, "must NOT unlink dead PID file");
-    assert.equal(existsSync(join(dir, "stale.json")), true, "must NOT unlink stale file");
-    // Obsolete aliases removed
+    // 保留檔案；由外掛退出負責清理，避免誤刪替換檔案
+    assert.equal(existsSync(join(dir, "dead.json")), true, "不得刪除已終止 PID 之檔案");
+    assert.equal(existsSync(join(dir, "stale.json")), true, "不得刪除過期檔案");
+    // 已移除過時別名
     assert.equal(status.busySessions, undefined);
     assert.equal(status.retrySessions, undefined);
     assert.equal(status.idleSessions, undefined);
@@ -105,14 +105,14 @@ test("getOpenCodeStatus: single-pass validation ignores crashed PID and stale he
   }
 });
 
-test("getOpenCodeStatus: bounds checking rejects oversized files and future timestamps", () => {
+test("getOpenCodeStatus: 邊界檢查拒絕過大檔案與未來時間戳記", () => {
   const dir = mkdtempSync(join(tmpdir(), "opencode-test-"));
   try {
-    // Oversized file > 64KB
+    // 檔案過大 > 64KB
     const largeStr = "a".repeat(70000);
     writeFileSync(join(dir, "large.json"), JSON.stringify({ padding: largeStr }));
 
-    // Future heartbeat timestamp (> now + 5000ms)
+    // 未來心跳時間戳記（> 目前時間 + 5000 毫秒）
     writeFileSync(
       join(dir, "future.json"),
       JSON.stringify({
@@ -123,7 +123,7 @@ test("getOpenCodeStatus: bounds checking rejects oversized files and future time
       }),
     );
 
-    // Invalid heartbeatTimeoutMs (NaN) safely falls back
+    // 無效的 heartbeatTimeoutMs (NaN) 安全降級
     const status = getOpenCodeStatus({
       opencodeDir: dir,
       heartbeatTimeoutMs: Number.NaN,
@@ -137,10 +137,10 @@ test("getOpenCodeStatus: bounds checking rejects oversized files and future time
   }
 });
 
-test("getOpenCodeStatus: multi-project same-PID instance isolation", () => {
+test("getOpenCodeStatus: 多專案同 PID 實例隔離", () => {
   const dir = mkdtempSync(join(tmpdir(), "opencode-test-"));
   try {
-    // Two distinct plugin instances sharing the same server process PID
+    // 共享相同伺服器行程 PID 的兩個獨立外掛實例
     writeFileSync(
       join(dir, "inst-projA.json"),
       JSON.stringify({

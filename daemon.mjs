@@ -22,12 +22,12 @@ const maxFailures = 3;
 let failures = 0;
 
 writeDaemonPid(process.pid);
-appendLog(`daemon started (pid ${process.pid}, poll ${pollIntervalMs}ms)`);
+appendLog(`守護進程已啟動 (PID ${process.pid}，輪詢間隔 ${pollIntervalMs} 毫秒)`);
 
 function cleanupAndExit() {
   ensureAwake(false);
   removeDaemonPid();
-  appendLog("daemon stopped");
+  appendLog("守護進程已停止");
   process.exit(0);
 }
 
@@ -47,17 +47,17 @@ function poll() {
   if (result.status !== 0) {
     herdrFailed = true;
     failures += 1;
-    const errorMsg = (result.stderr ?? result.stdout ?? "unknown error")
+    const errorMsg = (result.stderr ?? result.stdout ?? "未知錯誤")
       .trim()
       .slice(0, 200);
-    appendLog(`herdr pane list failed (${result.status}): ${errorMsg}`);
+    appendLog(`herdr pane list 執行失敗 (${result.status})：${errorMsg}`);
   } else {
     failures = 0;
     try {
       const parsed = JSON.parse(result.stdout);
       panes = parsed?.result?.panes ?? parsed?.panes ?? [];
     } catch (error) {
-      appendLog(`pane list parse failed: ${error.message}`);
+      appendLog(`pane list 解析失敗：${error.message}`);
     }
   }
 
@@ -73,10 +73,10 @@ function poll() {
   if (herdrFailed && failures >= maxFailures) {
     if (opencodeWorking) {
       appendLog(
-        `herdr pane list failed (${failures} times) but OpenCode is working; staying alive`,
+        `herdr pane list 失敗（${failures} 次），但 OpenCode 仍在執行中；保持喚醒狀態`,
       );
     } else {
-      appendLog(`too many failures (${failures}), exiting`);
+      appendLog(`失敗次數過多（${failures} 次），即將退出`);
       cleanupAndExit();
       return;
     }
@@ -86,18 +86,18 @@ function poll() {
   if (opencodeEnabled && opencodeStatus.instancesCount > 0) {
     const ocActiveCount = opencodeStatus.activeSessions.length;
     ocDetails = opencodeWorking
-      ? `, opencode: working (${ocActiveCount} active)`
+      ? `, opencode: working (${ocActiveCount} 個活躍)`
       : ", opencode: idle";
   }
 
   if (shouldKeepAwake) {
     const herdrState = herdrWorking ? "working" : "idle";
-    appendLog(`working agents present (herdr: ${herdrState}${ocDetails}), keeping awake`);
+    appendLog(`檢測到工作中的 agent (herdr: ${herdrState}${ocDetails})，保持喚醒`);
   } else {
     const ocInst = opencodeEnabled
-      ? `, ${opencodeStatus.instancesCount} opencode instances`
+      ? `，${opencodeStatus.instancesCount} 個 opencode 實例`
       : "";
-    appendLog(`no working agents (${panes.length} panes${ocInst}), allowing sleep`);
+    appendLog(`無工作中的 agent (${panes.length} 個窗格${ocInst})，允許休眠`);
   }
 }
 

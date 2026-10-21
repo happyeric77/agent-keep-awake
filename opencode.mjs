@@ -99,7 +99,7 @@ export function getOpenCodeStatus(options = {}) {
       try {
         closeSync(fd);
       } catch {
-        // ignore
+        // 忽略錯誤
       }
     }
 
@@ -118,17 +118,17 @@ export function getOpenCodeStatus(options = {}) {
       continue;
     }
 
-    // Reject future heartbeat (tolerance 5s)
+    // 拒絕未來心跳時間戳記（容許誤差 5 秒）
     if (state.heartbeat > now + 5000) {
       continue;
     }
 
-    // Reject stale heartbeat
+    // 拒絕過期心跳
     if (now - state.heartbeat > heartbeatTimeoutMs) {
       continue;
     }
 
-    // Check process liveness; do not unlink dead PID to prevent race with replacement file
+    // 檢查行程存活狀態；不刪除已終止 PID 之檔案以避免替換檔案時產生競爭條件
     if (!isPidAlive(state.pid)) {
       continue;
     }

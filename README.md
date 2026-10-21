@@ -1,48 +1,47 @@
 # Herdr Keep Awake
 
-Prevent your Mac from sleeping while Herdr agents or OpenCode background sessions are working.
+在 Herdr agent 或 OpenCode 背景 session 執行工作時，防止您的 Mac 進入休眠。
 
-> **macOS only.** This plugin relies on `caffeinate`, which ships with macOS.
-> Linux (`systemd-inhibit`) and Windows (`SetThreadExecutionState`) support is a
-> possible future addition — pull requests welcome.
+> **僅支援 macOS。** 本外掛依賴 macOS 內建的 `caffeinate`。
+> 未來可能增加 Linux (`systemd-inhibit`) 與 Windows (`SetThreadExecutionState`) 支援——歡迎提交 Pull Request。
 
-Requires Node.js 18+. Zero npm dependencies.
+需要 Node.js 18+。零 npm 相依性。
 
-## How it works
+## 運作原理
 
-A startup hook spawns a small daemon. Every 15 seconds the daemon checks two independent sources:
-1. **Herdr panes:** runs `herdr pane list` (with bounded execution timeout) to check if any pane reports `agent_status: working`.
-2. **OpenCode sessions:** inspects active OpenCode instances for background or foreground sessions in active execution drain (`running`).
+啟動勾點（startup hook）會產生一個輕量守護進程（daemon）。守護進程每 15 秒檢查兩個獨立的來源：
+1. **Herdr 窗格：** 執行 `herdr pane list`（帶有執行逾時上限）以檢查是否有任何窗格回報 `agent_status: working`。
+2. **OpenCode sessions：** 檢查活躍的 OpenCode 實例，確認是否有處於活躍執行消耗（active execution drain，即 `running`）狀態的背景或前景 session。
 
-If **either** source is active (logical OR), the daemon keeps `caffeinate -i -s -d` alive — preventing system sleep and keeping the display on. When all Herdr agents and OpenCode sessions become idle, `caffeinate` is stopped and the Mac may sleep again. `blocked` panes and idle sessions are intentionally ignored.
+若**任一**來源處於活躍狀態（邏輯 OR），守護進程便會維持 `caffeinate -i -s -d` 運行——防止系統休眠並保持螢幕開啟。當所有 Herdr agent 與 OpenCode session 皆轉為閒置時，`caffeinate` 將被停止，Mac 可再次休眠。`blocked` 狀態的窗格與閒置（idle）的 session 會刻意被忽略。
 
-### OpenCode Multi-Session Awareness
+### OpenCode 多 Session 感知
 
-When multiple OpenCode sessions exist in the same project or across multiple projects, Herdr pane status only reflects whichever session is currently focused. If Session A is executing a long task in the background while you view idle Session B, Keep Awake uses the OpenCode v2 integration to track Session A independently:
+當同一個專案或多個專案中存在多個 OpenCode session 時，Herdr 窗格狀態僅能反映目前聚焦的 session。若 Session A 正在背景執行耗時任務，而您正在檢視處於閒置狀態的 Session B，Keep Awake 會利用 OpenCode v2 整合獨立追蹤 Session A：
 
-- **Authoritative Active Drains:** OpenCode v2 tracks active foreground session drains via `GET /api/session/active`. In OpenCode engine terms, this guarantees tracking of process-owned foreground drains driving active turns. When an agent turn finishes and awaits user prompt, its drain idles and is omitted from the active snapshot. Note: Retry/backoff real runtime coverage NOT VERIFIED; live plugin load and UI A busy B idle acceptance not performed.
-- **Instance Isolation:** Each OpenCode plugin instance assigns itself a unique UUID and writes its active sessions to `~/.local/state/herdr-keep-awake/opencode/<instance-uuid>.json`. Multiple projects running under the same OpenCode server PID remain isolated without state clashing.
-- **Resilience & Safe State Invalidation:** If an OpenCode process exits or crashes, the daemon detects process liveness and ignores stale or dead PID state files without unlinking them, avoiding race conditions with filename reuse. Plugin exit owns cleaning up its own state file, and stale heartbeats (default 30s since the last successful authoritative snapshot) automatically expire to prevent staying awake indefinitely. Retained stale or invalid files are ignored safely.
-- **Strict Snapshot Validation:** Heartbeats are refreshed only after a successful, valid snapshot. The plugin strictly validates the unwrapped map contract (session IDs prefixed with `ses` and `type: "running"`), rejecting malformed or enveloped responses without refreshing heartbeat or state.
-- **Independent Sources & Graceful Fallback:** If Herdr CLI experiences repeated failures while OpenCode sessions are actively running, keep-awake stays alive. If OpenCode or the plugin is not installed, Herdr pane detection continues to work normally.
+- **權威活躍消耗（Authoritative Active Drains）：** OpenCode v2 透過 `GET /api/session/active` 追蹤活躍的前景 session 消耗。在 OpenCode 引擎架構中，這能保證追蹤驅動活躍輪次（active turns）且由行程所持有的前景消耗。當 agent 輪次執行完畢並等待使用者輸入提示詞時，其消耗轉為閒置，並自活躍快照中移除。注意：Retry/backoff 真實執行環境覆蓋尚未驗證；真實 Plugin 載入與 UI A 忙碌 B 閒置之驗收尚未執行。
+- **實例隔離（Instance Isolation）：** 每個 OpenCode 外掛實例都會為自己指派唯一的 UUID，並將其活躍 session 寫入 `~/.local/state/herdr-keep-awake/opencode/<instance-uuid>.json`。在同一個 OpenCode 伺服器 PID 下運行的多個專案將保持相互隔離，不會發生狀態衝突。
+- **彈性與安全狀態失效（Resilience & Safe State Invalidation）：** 若 OpenCode 行程退出或崩潰，守護進程會偵測行程存活狀態（liveness），並忽略過期或無效 PID 的狀態檔而不會主動刪除（unlink）它們，以避免檔名重複使用時產生競爭條件（race conditions）。外掛退出時負責清理自己的狀態檔，而過期的心跳（預設距上次成功權威快照超過 30 秒）會自動過期，以防止系統無限期保持喚醒。保留的過期或無效檔案會被安全忽略。
+- **嚴格快照驗證（Strict Snapshot Validation）：** 心跳僅在取得成功且合法的快照後才會更新。外掛嚴格驗證非包裝映射（unwrapped map）協定（session ID 必須以 `ses` 開頭且 `type: "running"`），拒絕畸形或經包裝（enveloped）的回應，且此時不會更新心跳或狀態。
+- **獨立來源與優雅降級（Independent Sources & Graceful Fallback）：** 若 Herdr CLI 在 OpenCode session 活躍執行期間發生連續失敗，keep-awake 仍會維持喚醒狀態。若未安裝 OpenCode 或此外掛，Herdr 窗格偵測仍可維持正常運作。
 
-## Setup
+## 安裝設定
 
-### 1. Herdr Plugin Setup
+### 1. Herdr 外掛設定
 
-Install from GitHub:
+從 GitHub 安裝：
 
 ```
 herdr plugin install happyeric77/agent-keep-awake
 ```
 
-Or link a local checkout while developing:
+或在開發時連結本機目錄：
 
 ```
 herdr plugin link /path/to/agent-keep-awake
 ```
 
-Create the plugin config:
+建立外掛設定檔：
 
 ```
 CONFIG_DIR="$(herdr plugin config-dir herdr.keep-awake)"
@@ -50,24 +49,24 @@ mkdir -p "$CONFIG_DIR"
 cp .env.example "$CONFIG_DIR/.env"
 ```
 
-Confirm the actions are visible:
+確認動作（actions）可見：
 
 ```
 herdr plugin action list --plugin herdr.keep-awake
 ```
 
-The daemon starts automatically on the next Herdr server start (startup hook).
-To start it without restarting Herdr:
+守護進程會在下一次 Herdr 伺服器啟動時自動啟動（啟動勾點）。
+若要在不重啟 Herdr 的情況下啟動它：
 
 ```
 herdr plugin action invoke herdr.keep-awake.enable
 ```
 
-### 2. OpenCode v2 Plugin Setup (Optional, for OpenCode multi-session support)
+### 2. OpenCode v2 外掛設定（選填，用於 OpenCode 多 session 支援）
 
-The plugin file `opencode-plugin.mjs` is completely self-contained with zero dependencies and no relative import requirements.
+外掛檔案 `opencode-plugin.mjs` 完全自給自足，無任何外部相依性，亦無需相對路徑引入。
 
-You can register it in your global OpenCode configuration (`~/.config/opencode/opencode.json`):
+您可以將其註冊在全域 OpenCode 設定檔（`~/.config/opencode/opencode.json`）中：
 
 ```json
 {
@@ -78,43 +77,42 @@ You can register it in your global OpenCode configuration (`~/.config/opencode/o
 }
 ```
 
-Or link/copy it into a project's `.opencode/plugins/` directory:
+或將其連結／複製到專案的 `.opencode/plugins/` 目錄中：
 
 ```bash
 mkdir -p .opencode/plugins
 ln -s /path/to/agent-keep-awake/opencode-plugin.mjs .opencode/plugins/keep-awake.mjs
 ```
 
-> **Note on Environment Variables:** OpenCode processes run independently of Herdr and do not read Herdr's `$CONFIG_DIR/.env`. Both the daemon and the OpenCode plugin default to the shared directory `~/.local/state/herdr-keep-awake/opencode/`. If you customize `OPENCODE_STATE_DIR`, export it in your shell environment so both Herdr and OpenCode inherit it.
+> **環境變數注意事項：** OpenCode 行程獨立於 Herdr 運行，不會讀取 Herdr 的 `$CONFIG_DIR/.env`。守護進程與 OpenCode 外掛皆預設使用共用目錄 `~/.local/state/herdr-keep-awake/opencode/`。若您自訂了 `OPENCODE_STATE_DIR`，請在 shell 環境中 export 該變數，使 Herdr 與 OpenCode 均能繼承該設定。
 
-## Usage
+## 使用方法
 
-Once enabled, nothing else to do — the daemon keeps your Mac awake while agents
-work, and lets it sleep when they finish.
+啟用後無需其他操作——守護進程會在 agent 工作時保持 Mac 喚醒，並在工作完成後允許休眠。
 
-Toggle notifications on/off:
+切換啟用狀態：
 
 ```
 herdr plugin action invoke herdr.keep-awake.toggle
 ```
 
-Check the current mode:
+查看目前模式：
 
 ```
 cat ~/.local/state/herdr/plugins/herdr.keep-awake/enabled
 ```
 
-Check the daemon log:
+查看守護進程日誌：
 
 ```
 cat ~/.local/state/herdr/plugins/herdr.keep-awake/daemon.log
 ```
 
-*(When running outside Herdr or without `HERDR_PLUGIN_STATE_DIR`, fallback state is at `~/.local/state/herdr-keep-awake/`)*
+*(在 Herdr 外部執行或未設定 `HERDR_PLUGIN_STATE_DIR` 時，備用狀態檔位於 `~/.local/state/herdr-keep-awake/`)*
 
-## Keybinding
+## 按鍵綁定
 
-Bind the toggle action from `~/.config/herdr/config.toml`:
+在 `~/.config/herdr/config.toml` 中綁定切換動作：
 
 ```
 [[keys.command]]
@@ -124,7 +122,7 @@ command = "herdr.keep-awake.toggle"
 description = "Toggle keep awake"
 ```
 
-Reload Herdr after changing the config, and enable toasts to see feedback:
+修改設定後重新載入 Herdr，並啟用 toast 以檢視回饋：
 
 ```
 herdr server reload-config
@@ -135,48 +133,45 @@ herdr server reload-config
 delivery = "herdr"
 ```
 
-## Configuration
+## 設定選項
 
-All settings are read from `$CONFIG_DIR/.env`:
+所有設定皆自 `$CONFIG_DIR/.env` 讀取：
 
-| Variable | Default | Description |
+| 變數 | 預設值 | 說明 |
 |---|---|---|
-| `KEEP_AWAKE_ENABLED` | `1` | Master on/off switch |
-| `KEEP_AWAKE_POLL_INTERVAL` | `15` | Poll interval in seconds |
-| `KEEP_AWAKE_DISPLAY` | `1` | Keep the display on too while working; set `0` to only prevent system sleep (saves battery) |
-| `OPENCODE_KEEP_AWAKE_ENABLED` | `1` | Enable OpenCode multi-session tracking |
-| `OPENCODE_HEARTBEAT_TIMEOUT` | `30` | Heartbeat timeout in seconds for OpenCode process cleanup |
-| `OPENCODE_STATE_DIR` | `~/.local/state/herdr-keep-awake/opencode` | Explicit shared directory for OpenCode state files |
-| `HERDR_TIMEOUT_MS` | `5000` | Bounded execution timeout in milliseconds for `herdr pane list` |
+| `KEEP_AWAKE_ENABLED` | `1` | 主要啟用開關 |
+| `KEEP_AWAKE_POLL_INTERVAL` | `15` | 輪詢間隔（秒） |
+| `KEEP_AWAKE_DISPLAY` | `1` | 工作時是否同時保持螢幕開啟；設為 `0` 僅防止系統休眠（節省電量） |
+| `OPENCODE_KEEP_AWAKE_ENABLED` | `1` | 啟用 OpenCode 多 session 追蹤 |
+| `OPENCODE_HEARTBEAT_TIMEOUT` | `30` | OpenCode 行程清理的心跳逾時時間（秒） |
+| `OPENCODE_STATE_DIR` | `~/.local/state/herdr-keep-awake/opencode` | OpenCode 狀態檔的明確共用目錄 |
+| `HERDR_TIMEOUT_MS` | `5000` | `herdr pane list` 的執行逾時上限（毫秒） |
 
-## Testing
+## 測試
 
-Run unit and integration tests using Node.js:
+使用 Node.js 執行單元測試與整合測試：
 
 ```bash
 node --test
 ```
 
-### Test Scope & Limitations
+### 測試範圍與限制
 
-- Node test suite covers daemon subprocess lifecycle, caffeinate signaling, process liveness checks, and OpenCode state file parsing.
-- **Verification Limitations:**
-  - Retry/backoff real runtime coverage NOT VERIFIED (no concrete installed engine evidence that provider retry backoff preserves active drain state).
-  - Live plugin load and UI A busy B idle acceptance not performed.
-  - Complete validation is not claimed.
+- Node 測試套件涵蓋守護進程子行程生命週期、caffeinate 信號傳遞、行程存活檢查以及 OpenCode 狀態檔解析。
+- **驗證限制：**
+  - Retry/backoff 真實執行環境覆蓋尚未驗證（缺乏已安裝引擎的具體事證能證明 provider retry backoff 會維持活躍 drain 狀態）。
+  - 真實外掛載入與 UI A 忙碌 B 閒置之驗收尚未執行。
+  - 未宣稱完成完整驗證。
 
-## Limitations
+## 限制事項
 
-- On battery power, `caffeinate -s` (system sleep) is ignored by macOS —
-  only idle sleep is prevented. This is an Apple design decision.
-- Closing the laptop lid still forces sleep regardless of `caffeinate`.
-- The daemon checks the *agent status* reported by Herdr and OpenCode session status; it cannot see in-flight work of an agent that neither system considers active.
-- OpenCode tracking observes foreground Session drains returned by `/api/session/active`. Any external or detached processes spawned outside OpenCode's in-process turn execution (or sessions on other unmonitored servers) are not represented.
-- Keeping the display on drains battery noticeably (the display is the most
-  power-hungry component). Set `KEEP_AWAKE_DISPLAY=0` if you prefer battery
-  life over a lit screen.
-- OpenCode multi-session tracking requires OpenCode v2.0+ with `opencode-plugin.mjs` configured.
+- 使用電池供電時，macOS 會忽略 `caffeinate -s`（系統休眠）——僅防止閒置休眠。此為 Apple 系統設計決策。
+- 無論是否執行 `caffeinate`，闔上筆記型電腦螢幕仍會強制休眠。
+- 守護進程檢查的是 Herdr 回報的 *agent status* 與 OpenCode session 狀態；若兩個系統皆未將 agent 視為活躍狀態，則無法察覺其進行中的工作。
+- OpenCode 追蹤僅觀察 `/api/session/active` 回傳的前景 session 消耗。任何在 OpenCode 行程內輪次執行之外所產生的外部或分離（detached）行程（或未受監控的其他伺服器上的 session）皆無法被呈現。
+- 保持螢幕開啟會顯著消耗電池電量（螢幕為最耗電之組件）。若您偏好電池續航力勝於開啟螢幕，請設定 `KEEP_AWAKE_DISPLAY=0`。
+- OpenCode 多 session 追蹤需要 OpenCode v2.0+ 並設定 `opencode-plugin.mjs`。
 
-## License
+## 授權條款
 
 MIT

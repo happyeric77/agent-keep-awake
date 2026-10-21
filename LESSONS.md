@@ -1,6 +1,6 @@
 # Lessons
 
-- When the user specifies opencode-agy, delegate through its tool rather than switching to direct CLI execution; report tool failures before changing execution channels.
-
-- When integrating external runtimes, verify authoritative OpenAPI schemas and runtime sources instead of assuming legacy or inventing event shapes.
-- When a delegated CLI reports an authentication error, verify a fresh request and its launch context before concluding the user is logged out or asking them to sign in again.
+- 當撰寫PR或程式相關內容時，文件、註解、測試描述、提交訊息與PR說明使用繁體中文，僅保留必要技術識別字原文。
+- 當使用者指定 opencode-agy 時，應透過其工具進行委派，而非切換至直接執行 CLI；在切換執行管道前，應先回報工具失敗原因。
+- 當整合外部執行環境（runtimes）時，應驗證權威的 OpenAPI schema 與執行環境來源，而非假設舊版行為或自行臆造事件結構（event shapes）。
+- 當委派的 CLI 回報驗證錯誤時，在斷定使用者已登出或要求其重新登入之前，應先驗證全新的請求及其啟動上下文（launch context）。

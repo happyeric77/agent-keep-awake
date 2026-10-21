@@ -15,10 +15,10 @@ async function waitFor(condition, message, timeoutMs = 5000, stepMs = 50) {
     if (condition()) return;
     await sleep(stepMs);
   }
-  assert.fail(message ?? `timed out waiting for condition after ${timeoutMs}ms`);
+  assert.fail(message ?? `等待條件逾時（超過 ${timeoutMs} 毫秒）`);
 }
 
-test("daemon-spawn: real subprocess daemon lifecycle, restart consuming snapshot, and flag regressions", async () => {
+test("daemon-spawn: 真實子行程守護進程生命週期、重啟讀取快照與旗標迴歸", async () => {
   const testRoot = mkdtempSync(join(tmpdir(), "daemon-spawn-test-"));
   const binDir = join(testRoot, "bin");
   const stateDir = join(testRoot, "state");
@@ -31,7 +31,7 @@ test("daemon-spawn: real subprocess daemon lifecycle, restart consuming snapshot
   fs.mkdirSync(binDir, { recursive: true });
   fs.mkdirSync(opencodeDir, { recursive: true });
 
-  // Mock herdr script
+  // 模擬 herdr 指令稿
   const herdrScript = `#!/bin/sh
 echo "herdr called: $@" >> "${herdrLog}"
 if [ -f "${herdrControlFile}" ]; then
@@ -44,7 +44,7 @@ exit 0
   writeFileSync(join(binDir, "herdr"), herdrScript, "utf8");
   chmodSync(join(binDir, "herdr"), 0o755);
 
-  // Mock caffeinate script: logs invocation arguments and sleeps until killed
+  // 模擬 caffeinate 指令稿：記錄啟動參數並休眠直至被終止
   const caffeinateScript = `#!/bin/sh
 echo "spawn: $$ $@" >> "${caffeinateLog}"
 trap 'echo "kill: $$" >> "${caffeinateLog}"; exit 0' TERM INT
@@ -55,7 +55,7 @@ done
   writeFileSync(join(binDir, "caffeinate"), caffeinateScript, "utf8");
   chmodSync(join(binDir, "caffeinate"), 0o755);
 
-  // Initial Herdr state: working
+  // 初始 Herdr 狀態：working
   writeFileSync(
     herdrControlFile,
     JSON.stringify({ panes: [{ id: "p1", agent_status: "working" }] }),
@@ -79,37 +79,37 @@ done
   });
 
   try {
-    // 1. Initial poll: Herdr is working -> caffeinate must be spawned with -d
+    // 1. 初始輪詢：Herdr 處於 working -> caffeinate 必須以 -d 參數啟動
     await waitFor(
       () => existsSync(caffeinateLog) && readFileSync(caffeinateLog, "utf8").includes("spawn:"),
-      "caffeinate must be spawned on startup",
+      "啟動時必須產生 caffeinate",
     );
     let logLines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
     let spawns = logLines.filter((l) => l.startsWith("spawn:"));
-    assert.equal(spawns.length, 1, "exactly one caffeinate spawn on startup");
-    assert.equal(spawns[0].includes("-d"), true, "default KEEP_AWAKE_DISPLAY=1 must include -d");
+    assert.equal(spawns.length, 1, "啟動時必須恰好產生一個 caffeinate");
+    assert.equal(spawns[0].includes("-d"), true, "預設 KEEP_AWAKE_DISPLAY=1 必須包含 -d 參數");
 
-    // 2. Second poll: still working -> caffeinate must NOT be duplicated
+    // 2. 第二次輪詢：仍處於 working -> caffeinate 不得重複啟動
     await sleep(1100);
     logLines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
     spawns = logLines.filter((l) => l.startsWith("spawn:"));
-    assert.equal(spawns.length, 1, "no duplicate caffeinate spawn while still working");
+    assert.equal(spawns.length, 1, "持續處於 working 狀態時不得重複產生 caffeinate");
 
-    // 3. Mode flag regression (enabled file): set to disabled -> caffeinate must be killed
+    // 3. 模式旗標迴歸測試（enabled 檔案）：設為 disabled -> caffeinate 必須被終止
     writeFileSync(join(stateDir, "enabled"), "disabled\n", "utf8");
     await waitFor(() => {
       const lines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
       return lines.some((l) => l.startsWith("kill:"));
-    }, "caffeinate must be killed when mode is disabled");
+    }, "當模式被停用時必須終止 caffeinate");
 
-    // Re-enable mode
+    // 重新啟用模式
     writeFileSync(join(stateDir, "enabled"), "enabled\n", "utf8");
     await waitFor(() => {
       const lines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
       return lines.filter((l) => l.startsWith("spawn:")).length >= 2;
-    }, "caffeinate must respawn when mode is re-enabled");
+    }, "當模式重新啟用時必須重新產生 caffeinate");
 
-    // 4. Herdr becomes idle -> caffeinate must be killed
+    // 4. Herdr 轉為 idle -> caffeinate 必須被終止
     writeFileSync(
       herdrControlFile,
       JSON.stringify({ panes: [{ id: "p1", agent_status: "idle" }] }),
@@ -118,9 +118,9 @@ done
     await waitFor(() => {
       const lines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
       return lines.filter((l) => l.startsWith("kill:")).length >= 2;
-    }, "caffeinate must be killed when Herdr becomes idle");
+    }, "當 Herdr 轉為 idle 時必須終止 caffeinate");
 
-    // 5. OpenCode has an active session while Herdr is idle -> caffeinate re-spawned
+    // 5. Herdr 處於 idle 但 OpenCode 有活躍 session -> caffeinate 重新啟動
     const ocFile = join(opencodeDir, "inst-1.json");
     writeFileSync(
       ocFile,
@@ -137,13 +137,13 @@ done
     await waitFor(() => {
       const lines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
       return lines.filter((l) => l.startsWith("spawn:")).length >= 3;
-    }, "caffeinate spawned for active OpenCode session");
+    }, "OpenCode session 活躍時必須產生 caffeinate");
 
-    // 6. RESTART TEST: kill daemon while valid OpenCode snapshot exists; new daemon must resume keep awake
+    // 6. 重啟測試：在存在有效 OpenCode 快照時終止守護進程；新守護進程必須恢復保持喚醒
     daemonProc.kill("SIGTERM");
-    await waitFor(() => daemonProc.exitCode !== null, "daemon must exit on SIGTERM");
+    await waitFor(() => daemonProc.exitCode !== null, "收到 SIGTERM 時守護進程必須退出");
 
-    // Start a second daemon instance with KEEP_AWAKE_DISPLAY=0 to verify display flag regression
+    // 啟動第二個守護進程實例並設定 KEEP_AWAKE_DISPLAY=0 以驗證螢幕旗標迴歸
     daemonProc = spawn(process.execPath, [daemonPath], {
       env: {
         ...baseEnv,
@@ -155,7 +155,7 @@ done
     await waitFor(() => {
       const lines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
       return lines.filter((l) => l.startsWith("spawn:")).length >= 4;
-    }, "restarted daemon must consume valid snapshot and spawn caffeinate");
+    }, "重啟後的守護進程必須讀取有效快照並產生 caffeinate");
 
     const latestSpawn = readFileSync(caffeinateLog, "utf8")
       .trim()
@@ -165,16 +165,16 @@ done
     assert.equal(
       latestSpawn.includes("-d"),
       false,
-      "KEEP_AWAKE_DISPLAY=0 must not include -d flag",
+      "KEEP_AWAKE_DISPLAY=0 不得包含 -d 參數",
     );
 
-    // 7. Herdr pane list fails for 3+ consecutive polls while OpenCode is active -> daemon stays alive
+    // 7. OpenCode 處於活躍狀態時，herdr pane list 連續 3 次以上輪詢失敗 -> 守護進程保持運行
     writeFileSync(`${herdrControlFile}.exit`, "1", "utf8");
     writeFileSync(herdrControlFile, "error: herdr broken", "utf8");
     await sleep(3200);
-    assert.equal(daemonProc.exitCode, null, "daemon must stay alive during Herdr failures if OpenCode is working");
+    assert.equal(daemonProc.exitCode, null, "當 OpenCode 處於 working 時，Herdr 失敗期間守護進程必須保持運行");
 
-    // 8. OpenCode becomes idle -> caffeinate killed
+    // 8. OpenCode 轉為 idle -> caffeinate 被終止
     const killsBeforeIdle = readFileSync(caffeinateLog, "utf8")
       .trim()
       .split("\n")
@@ -193,15 +193,15 @@ done
     await waitFor(() => {
       const lines = readFileSync(caffeinateLog, "utf8").trim().split("\n");
       return lines.filter((l) => l.startsWith("kill:")).length > killsBeforeIdle;
-    }, "caffeinate killed when OpenCode becomes idle");
+    }, "當 OpenCode 轉為 idle 時必須終止 caffeinate");
 
-    // 9. Herdr failure continues with all sources idle -> daemon exits after max failures
-    await waitFor(() => daemonProc.exitCode !== null, "daemon exits when Herdr fails without active work");
+    // 9. 所有來源均處於 idle 且 Herdr 持續失敗 -> 守護進程達到最大失敗次數後退出
+    await waitFor(() => daemonProc.exitCode !== null, "在無活躍工作且 Herdr 失敗時守護進程必須退出");
   } finally {
     try {
       daemonProc.kill("SIGTERM");
     } catch {
-      // ignore
+      // 忽略錯誤
     }
     rmSync(testRoot, { recursive: true, force: true });
   }
