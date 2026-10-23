@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { getOpenCodeStatus } from "../opencode.mjs";
 import { createTestDir, mockSnapshot, writeJson } from "./helpers.mjs";
 
-test("getOpenCodeStatus: 當目錄不存在時回傳非活躍狀態", () => {
+test("getOpenCodeStatus: missing directories are inactive", () => {
   const nonExistentDir = join(tmpdir(), `test-opencode-none-${Date.now()}`);
   const status = getOpenCodeStatus({ opencodeDir: nonExistentDir });
   assert.equal(status.working, false);
@@ -14,7 +14,7 @@ test("getOpenCodeStatus: 當目錄不存在時回傳非活躍狀態", () => {
   assert.equal(status.activeSessions.length, 0);
 });
 
-test("getOpenCodeStatus: 處理 A running 與 B idle（idle 已自狀態中刪除）", (t) => {
+test("getOpenCodeStatus: aggregates running A and removed idle B", (t) => {
   const { dir } = createTestDir("opencode-reader-", t);
   writeJson(join(dir, "inst-1.json"), mockSnapshot({ sessionA: { status: "running" } }));
 
@@ -24,7 +24,7 @@ test("getOpenCodeStatus: 處理 A running 與 B idle（idle 已自狀態中刪�
   assert.equal(status.instancesCount, 1);
 });
 
-test("getOpenCodeStatus: 全部 idle（空 sessions）允許休眠", (t) => {
+test("getOpenCodeStatus: empty sessions allow sleep", (t) => {
   const { dir } = createTestDir("opencode-reader-", t);
   writeJson(join(dir, "inst-1.json"), mockSnapshot({}));
 
@@ -33,7 +33,7 @@ test("getOpenCodeStatus: 全部 idle（空 sessions）允許休眠", (t) => {
   assert.equal(status.activeSessions.length, 0);
 });
 
-test("getOpenCodeStatus: 單次驗證忽略崩潰 PID 與過期心跳且不刪除檔案", (t) => {
+test("getOpenCodeStatus: ignores dead PIDs and stale heartbeats without deleting files", (t) => {
   const { dir } = createTestDir("opencode-reader-", t);
   writeJson(join(dir, "dead.json"), mockSnapshot({ crashedSession: { status: "running" } }, { pid: 99999999 }));
   writeJson(
@@ -50,23 +50,23 @@ test("getOpenCodeStatus: 單次驗證忽略崩潰 PID 與過期心跳且不刪�
   assert.equal(status.working, false);
   assert.equal(status.activeSessions.length, 0);
   assert.equal(status.instancesCount, 0);
-  assert.equal(existsSync(join(dir, "dead.json")), true, "不得刪除已終止 PID 之檔案");
-  assert.equal(existsSync(join(dir, "stale.json")), true, "不得刪除過期檔案");
+  assert.equal(existsSync(join(dir, "dead.json")), true, "Do not delete dead-PID snapshots");
+  assert.equal(existsSync(join(dir, "stale.json")), true, "Do not delete stale snapshots");
 });
 
-test("getOpenCodeStatus: 邊界檢查拒絕過大檔案、未來時間戳記與畸形資料", (t) => {
+test("getOpenCodeStatus: rejects oversized files, future timestamps, and malformed data", (t) => {
   const { dir } = createTestDir("opencode-reader-", t);
 
-  // 大小 > 64KB 之快照，證明 size guard 確實生效
+  // Exercise the 64 KB size guard.
   writeJson(join(dir, "large.json"), mockSnapshot({ ses_large: { status: "running" } }, { padding: "x".repeat(70_000) }));
 
-  // 未來心跳時間戳記（> 目前時間 + 5000 毫秒）
+  // Reject heartbeats more than five seconds in the future.
   writeJson(join(dir, "future.json"), mockSnapshot({ ses_f: { status: "running" } }, { heartbeat: Date.now() + 60_000 }));
 
-  // 畸形 JSON 檔案
+  // Malformed JSON.
   writeFileSync(join(dir, "malformed.json"), "{ malformed json", "utf8");
 
-  // 無效的 heartbeatTimeoutMs (NaN) 安全降級
+  // Invalid timeout values fall back safely.
   const status = getOpenCodeStatus({
     opencodeDir: dir,
     heartbeatTimeoutMs: Number.NaN,
@@ -77,13 +77,13 @@ test("getOpenCodeStatus: 邊界檢查拒絕過大檔案、未來時間戳記與�
   assert.equal(status.instancesCount, 0);
 });
 
-test("getOpenCodeStatus: 多專案同 PID 實例隔離與活躍聚合", (t) => {
+test("getOpenCodeStatus: isolates same-PID projects and aggregates active sessions", (t) => {
   const { dir } = createTestDir("opencode-reader-", t);
 
-  // 1 個 idle 實例
+  // One idle instance.
   writeJson(join(dir, "inst-idle.json"), mockSnapshot({}, { id: "inst-idle", projectDir: "/project/idle" }));
 
-  // 至少 2 個 active 實例，具有多個 session
+  // Two active instances with multiple sessions.
   writeJson(
     join(dir, "inst-act1.json"),
     mockSnapshot(
@@ -99,7 +99,7 @@ test("getOpenCodeStatus: 多專案同 PID 實例隔離與活躍聚合", (t) => {
     ),
   );
 
-  // 有效 JSON 但 invalid schema（pid / heartbeat / sessions）
+  // Valid JSON with invalid PID, heartbeat, or session schemas.
   writeJson(join(dir, "invalid-pid.json"), {
     id: "invalid-pid",
     pid: "not-a-number",
@@ -125,8 +125,8 @@ test("getOpenCodeStatus: 多專案同 PID 實例隔離與活躍聚合", (t) => {
   });
 
   assert.equal(status.working, true);
-  // 3 個合法實例（1 idle + 2 active），invalid schema 被忽略
+  // Keep three valid instances and ignore invalid schemas.
   assert.equal(status.instancesCount, 3);
-  // 多 session 完整 activeSessions union 驗證
+  // Verify the full union of active sessions.
   assert.deepEqual(status.activeSessions.sort(), ["ses_a1", "ses_a2", "ses_b1"]);
 });

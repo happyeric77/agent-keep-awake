@@ -6,21 +6,29 @@ import plugin from "../opencode-plugin.mjs";
 import { getOpenCodeStatus } from "../opencode.mjs";
 import { createMockOpenCodeContext, createTestDir, readJson, repoRoot, sleep, waitFor } from "./helpers.mjs";
 
-test("opencode-plugin: 完全自給自足且無任何相對路徑引入", () => {
+test("opencode-plugin: implementation is self-contained without relative imports", () => {
   const code = readFileSync(join(repoRoot, "opencode-plugin.mjs"), "utf8");
   const relativeImportRegex = /from\s+["'](\.\/|\.\.\/)/g;
   const matches = [...code.matchAll(relativeImportRegex)];
-  assert.equal(matches.length, 0, "opencode-plugin.mjs 不得包含任何相對路徑引入");
+  assert.equal(matches.length, 0, "Implementation must not contain relative imports");
   assert.equal(typeof plugin.setup, "function");
   assert.equal(plugin.id, "herdr.keep-awake");
 });
 
-test("opencode-plugin: 暴露 bug - 真實 OpenCode 2.0.26 環境無 ctx.session.active 時必須透過事件訂閱追蹤 session", async (t) => {
+test("opencode-plugin: directory entrypoint exports the OpenCode plugin contract", async () => {
+  const indexModule = await import("../index.js");
+  assert.equal(typeof indexModule.default, "object", "Default export must be an object");
+  assert.equal(indexModule.default.id, "herdr.keep-awake", "Plugin ID must match");
+  assert.equal(typeof indexModule.default.setup, "function", "Setup must be a function");
+  assert.equal(indexModule.plugin, indexModule.default, "Named and default exports must match");
+});
+
+test("opencode-plugin: tracks events without the nonexistent ctx.session.active API", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-bug-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/test" });
 
-  // 驗證真實 OpenCode 2.0.26 形狀：ctx.session 沒有 active 函式
-  assert.equal(context.session.active, undefined, "真實 OpenCode 2.0.26 Plugin context 的 ctx.session 不得有 active");
+  // Match the actual V2 Plugin Context rather than inventing an active API.
+  assert.equal(context.session.active, undefined, "Plugin Context has no session.active method");
 
   const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 50 });
   defer(cleanup);
@@ -28,7 +36,7 @@ test("opencode-plugin: 暴露 bug - 真實 OpenCode 2.0.26 環境無 ctx.session
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
   assert.equal(existsSync(stateFile), true);
 
-  // 發出 session 執行開始事件
+  // Start execution.
   emit({
     id: "evt_1",
     type: "session.execution.started",
@@ -39,10 +47,10 @@ test("opencode-plugin: 暴露 bug - 真實 OpenCode 2.0.26 環境無 ctx.session
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_started_1?.status === "running";
-  }, "必須透過 session.execution.started 事件記錄活躍 session");
+  }, "Execution started must record an active session");
 });
 
-test("opencode-plugin: 同 PID 下的兩個專案實例各自獨立寫入與清理", async (t) => {
+test("opencode-plugin: same-PID project instances write and clean up independently", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-multi-", t);
   const { context: ctxA, emit: emitA } = createMockOpenCodeContext({ directory: "/project/A" });
   const { context: ctxB, emit: emitB } = createMockOpenCodeContext({ directory: "/project/B" });
@@ -56,21 +64,21 @@ test("opencode-plugin: 同 PID 下的兩個專案實例各自獨立寫入與清�
   emitB({ id: "evt_b", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_B" } });
 
   const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
-  assert.equal(files.length, 2, "同 PID 下必須建立兩個獨立的 UUID 狀態檔");
+  assert.equal(files.length, 2, "Same-PID instances need distinct UUID snapshots");
 
   await waitFor(() => {
     const sessions = files.map((f) => readJson(join(dir, f))).flatMap((s) => Object.keys(s.sessions));
     return sessions.includes("ses_A") && sessions.includes("ses_B");
-  }, "兩個實例必須各自記錄各自的 session");
+  }, "Each instance must record its own session");
 
   await cleanupA();
-  assert.equal(readdirSync(dir).filter((f) => f.endsWith(".json")).length, 1, "清理 A 必須僅刪除 A 的檔案");
+  assert.equal(readdirSync(dir).filter((f) => f.endsWith(".json")).length, 1, "Cleanup A must remove only its file");
 
   await cleanupB();
-  assert.equal(readdirSync(dir).filter((f) => f.endsWith(".json")).length, 0, "清理 B 必須刪除 B 的檔案");
+  assert.equal(readdirSync(dir).filter((f) => f.endsWith(".json")).length, 0, "Cleanup B must remove its file");
 });
 
-test("opencode-plugin: 事件訂閱追蹤 session.execution.started 與結束（succeeded/failed/interrupted）", async (t) => {
+test("opencode-plugin: tracks execution started and succeeded/failed/interrupted events", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-exec-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/exec" });
 
@@ -79,7 +87,7 @@ test("opencode-plugin: 事件訂閱追蹤 session.execution.started 與結束（
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 啟動 3 個 session
+  // Start three sessions.
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_1" } });
   emit({ id: "e2", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_2" } });
   emit({ id: "e3", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_3" } });
@@ -87,31 +95,31 @@ test("opencode-plugin: 事件訂閱追蹤 session.execution.started 與結束（
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_1 && s.sessions.ses_2 && s.sessions.ses_3;
-  }, "所有 3 個 session 皆已進入活躍狀態");
+  }, "All three sessions must be active");
 
-  // ses_1 成功結束
+  // First session succeeds.
   emit({ id: "e4", type: "session.execution.succeeded", created: Date.now(), data: { sessionID: "ses_1" } });
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_1 === undefined && s.sessions.ses_2 && s.sessions.ses_3;
-  }, "ses_1 成功結束後必須自活躍清單移除");
+  }, "Successful session must leave the active list");
 
-  // ses_2 失敗結束
+  // Second session fails.
   emit({ id: "e5", type: "session.execution.failed", created: Date.now(), data: { sessionID: "ses_2", error: { message: "fail" } } });
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_2 === undefined && s.sessions.ses_3;
-  }, "ses_2 失敗結束後必須自活躍清單移除");
+  }, "Failed session must leave the active list");
 
-  // ses_3 被中斷
+  // Third session is interrupted.
   emit({ id: "e6", type: "session.execution.interrupted", created: Date.now(), data: { sessionID: "ses_3", reason: "user" } });
   await waitFor(() => {
     const s = readJson(stateFile);
     return Object.keys(s.sessions).length === 0;
-  }, "所有 session 結束後活躍清單必須為空");
+  }, "No active sessions may remain after all finish");
 });
 
-test("opencode-plugin: 涵蓋真實 v2.0.26 事件：session.retry.scheduled 與進行中事件維持活躍，execution 成功結束轉為閒置", async (t) => {
+test("opencode-plugin: retry and progress remain active until execution succeeds", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-retry-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/retry" });
 
@@ -120,7 +128,7 @@ test("opencode-plugin: 涵蓋真實 v2.0.26 事件：session.retry.scheduled 與
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 1. session.execution.started 建立活躍
+  // Start the execution.
   emit({
     id: "e1",
     type: "session.execution.started",
@@ -131,9 +139,9 @@ test("opencode-plugin: 涵蓋真實 v2.0.26 事件：session.retry.scheduled 與
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_task?.status === "running";
-  }, "session.execution.started 必須記錄為活躍狀態");
+  }, "Execution started must mark activity");
 
-  // 2. provider 重試等待（Retry/Backoff）：真實 OpenCode v2.0.26 發射 session.retry.scheduled
+  // Provider retry/backoff remains active.
   emit({
     id: "e2",
     type: "session.retry.scheduled",
@@ -144,9 +152,9 @@ test("opencode-plugin: 涵蓋真實 v2.0.26 事件：session.retry.scheduled 與
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_task?.status === "running";
-  }, "session.retry.scheduled 必須維持活躍狀態");
+  }, "Scheduled retry must retain activity");
 
-  // 3. 進行中連續事件（如 tool progress、step streamed、text delta）維持活躍
+  // Progress events retain activity.
   emit({
     id: "e3",
     type: "session.tool.progress",
@@ -157,9 +165,9 @@ test("opencode-plugin: 涵蓋真實 v2.0.26 事件：session.retry.scheduled 與
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_task?.status === "running";
-  }, "session.tool.progress 必須維持活躍狀態");
+  }, "Tool progress must retain activity");
 
-  // 4. session.execution.succeeded 正常完成並轉為閒置
+  // Successful execution becomes idle.
   emit({
     id: "e4",
     type: "session.execution.succeeded",
@@ -170,52 +178,50 @@ test("opencode-plugin: 涵蓋真實 v2.0.26 事件：session.retry.scheduled 與
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_task === undefined;
-  }, "session.execution.succeeded 必須移除該 session");
+  }, "Successful execution must remove the session");
 });
 
-test("opencode-plugin: 任務斷線前已安靜超過 lease 仍在重連寬限保持 working", async (t) => {
+test("opencode-plugin: work already silent before disconnect remains working after reconnect", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-silent-before-", t);
   const { context, emit, setStreamFail, getSubscribeCount } = createMockOpenCodeContext({ directory: "/project/silent-before" });
 
-  // 設定租約為 120ms
-  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 30, sessionLeaseMs: 120 });
+  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 30 });
   defer(cleanup);
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 1. 任務啟動
+  // Start work.
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_silent_before" } });
   await waitFor(() => readJson(stateFile).sessions.ses_silent_before?.status === "running");
 
-  // 2. 在健康串流下保持安靜超過租約時間 (160ms > 120ms)
+  // A healthy stream can be silent.
   await sleep(160);
 
-  // 驗證健康串流下活動絕不得因安靜到期被刪除
-  assert.equal(readJson(stateFile).sessions.ses_silent_before?.status, "running", "健康串流下沉默任務不得被清理");
+  // Silence must not expire activity.
+  assert.equal(readJson(stateFile).sessions.ses_silent_before?.status, "running", "Silent work must remain active");
 
-  // 3. 模擬短暫斷線
+  // Briefly disconnect.
   setStreamFail(true);
   await sleep(40);
 
-  // 4. 重連，確實等待連線次數增加
+  // Observe a real resubscription.
   setStreamFail(false);
-  await waitFor(() => getSubscribeCount() >= 2, "重連必須確實觸發第二次訂閱");
+  await waitFor(() => getSubscribeCount() >= 2, "Reconnect must trigger a second subscription");
 
-  // 5. 重連後立即檢查：舊 updatedAt 雖然已超時，但因獲得重連寬限租約，仍必須維持 working
+  // Reconnection is not completion.
   const stateAfterReconnect = readJson(stateFile);
-  assert.equal(stateAfterReconnect.sessions.ses_silent_before?.status, "running", "重連寬限期內即便舊時間已過期仍必須保持 running");
+  assert.equal(stateAfterReconnect.sessions.ses_silent_before?.status, "running", "Reconnect must retain running work");
 
   const status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 500 });
-  assert.equal(status.working, true, "斷線前安靜超過租約之任務在重連寬限期內讀取端必須保持 working");
+  assert.equal(status.working, true, "The reader must retain silent work after reconnect");
   assert.equal(status.activeSessions.includes("ses_silent_before"), true);
 });
 
-test("opencode-plugin: 健康 stream 沉默超過 lease 仍保持 working", async (t) => {
+test("opencode-plugin: a healthy silent stream retains working status", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-healthy-silent-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/healthy-silent" });
 
-  // 設定租約為 100ms
-  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 25, sessionLeaseMs: 100 });
+  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 25 });
   defer(cleanup);
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
@@ -223,22 +229,22 @@ test("opencode-plugin: 健康 stream 沉默超過 lease 仍保持 working", asyn
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_healthy_silent" } });
   await waitFor(() => readJson(stateFile).sessions.ses_healthy_silent?.status === "running");
 
-  // 串流持續健康，心跳定時器持續運作，但無任何新事件長達 250ms（超過 2 倍租約）
+  // Heartbeats continue without new events.
   await sleep(250);
 
   const state = readJson(stateFile);
-  assert.equal(state.sessions.ses_healthy_silent?.status, "running", "健康串流下沉默長任務絕不因租約過期被刪除");
+  assert.equal(state.sessions.ses_healthy_silent?.status, "running", "Elapsed silence must not remove work");
 
   const status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 500 });
-  assert.equal(status.working, true, "健康串流下沉默任務必須持續保持 working");
+  assert.equal(status.working, true, "Silent work must remain working");
   assert.equal(status.activeSessions.includes("ses_healthy_silent"), true);
 });
 
-test("opencode-plugin: 重連寬限期內若有新活動則清除 unconfirmed lease 保持 working", async (t) => {
+test("opencode-plugin: new activity after reconnect remains working", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-lease-renew-", t);
   const { context, emit, setStreamFail, getSubscribeCount } = createMockOpenCodeContext({ directory: "/project/lease-renew" });
 
-  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 25, sessionLeaseMs: 120 });
+  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 25 });
   defer(cleanup);
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
@@ -246,65 +252,67 @@ test("opencode-plugin: 重連寬限期內若有新活動則清除 unconfirmed le
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_renew" } });
   await waitFor(() => readJson(stateFile).sessions.ses_renew?.status === "running");
 
-  // 斷線
+  // Disconnect.
   setStreamFail(true);
   await sleep(40);
 
-  // 重連
+  // Reconnect.
   setStreamFail(false);
-  await waitFor(() => getSubscribeCount() >= 2, "重連必須觸發訂閱");
+  await waitFor(() => getSubscribeCount() >= 2, "Reconnect must resubscribe");
 
-  // 在重連寬限期內發射新活動事件，確認租約應被清除為健康狀態
+  // Emit activity after reconnect.
   emit({ id: "e2", type: "session.tool.progress", created: Date.now(), data: { sessionID: "ses_renew", metadata: {} } });
 
-  // 等待超過重連租約時間 (180ms > 120ms)
+  // Wait through multiple reconciliation cycles.
   await sleep(180);
 
-  // 驗證未被當成幽靈 session 清理
+  // Activity must remain protected.
   const state = readJson(stateFile);
-  assert.equal(state.sessions.ses_renew?.status, "running", "收到新活動後未確認租約必須被清除並維持 running");
+  assert.equal(state.sessions.ses_renew?.status, "running", "New activity must remain running");
 
   const status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 500 });
   assert.equal(status.working, true);
   assert.equal(status.activeSessions.includes("ses_renew"), true);
 });
 
-test("opencode-plugin: 正常 EOF 終止具備有界退避且重新連上但安靜時心跳健康", async (t) => {
+test("opencode-plugin: EOF uses bounded backoff and quiet reconnects retain healthy heartbeats", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-eof-", t);
-  const { context, emit, closeStream, getSubscribeCount } = createMockOpenCodeContext({ directory: "/project/eof" });
+  const { context, emit, closeStream, updateApi, getSubscribeCount } = createMockOpenCodeContext({ directory: "/project/eof" });
 
-  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 40, sessionLeaseMs: 150 });
+  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 40 });
   defer(cleanup);
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 建立初始活躍狀態
+  // Establish activity before EOF.
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_eof" } });
   await waitFor(() => readJson(stateFile).sessions.ses_eof?.status === "running");
 
   const initialCount = getSubscribeCount();
-  assert.equal(initialCount, 1, "初次連線僅訂閱 1 次");
+  assert.equal(initialCount, 1, "Initial connection must subscribe once");
 
-  // 正常 EOF 關閉串流
+  // Close the stream with normal EOF.
   closeStream();
 
-  // 確實等待退避重連觸發（非空泛等待）
-  await waitFor(() => getSubscribeCount() >= 2, "正常 EOF 後必須觸發重新訂閱");
+  // Observe an actual reconnect, not merely elapsed time.
+  await waitFor(() => getSubscribeCount() >= 2, "EOF must trigger resubscription");
 
   const countAfterEof = getSubscribeCount();
-  assert.equal(countAfterEof <= initialCount + 4, true, "必須遵守有界退避，不得形成緊密無窮迴圈");
+  assert.equal(countAfterEof <= initialCount + 4, true, "Bounded backoff must prevent a tight loop");
 
-  // 重新連上但環境安靜：等待幽靈 session 租約過期後被清除
+  // A quiet reconnect clears work only after authoritative completion.
+  assert.equal(getOpenCodeStatus({ opencodeDir: dir }).working, true);
+  updateApi({ type: "session.execution.succeeded", data: { sessionID: "ses_eof" } });
   await waitFor(() => {
     const s = readJson(stateFile);
     return Object.keys(s.sessions).length === 0;
-  }, "重新連上後幽靈 session 應被清除");
+  }, "Authoritative completion must clear the session");
 
   const status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 500 });
-  assert.equal(status.working, false, "安靜重連後必須允許休眠");
+  assert.equal(status.working, false, "Confirmed completion must allow sleep");
 });
 
-test("opencode-plugin: 啟動前已活躍/斷線期間持續工作依真實 v2.0.26 進行中事件恢復", async (t) => {
+test("opencode-plugin: progress events recover work started before startup or during disconnect", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-resume-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/resume" });
 
@@ -313,7 +321,7 @@ test("opencode-plugin: 啟動前已活躍/斷線期間持續工作依真實 v2.0
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 錯過 execution.started，直接收到 session.step.started 進行中事件
+  // Recover from progress even if execution.started was missed.
   emit({
     id: "step_1",
     type: "session.step.started",
@@ -324,9 +332,9 @@ test("opencode-plugin: 啟動前已活躍/斷線期間持續工作依真實 v2.0
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_ongoing?.status === "running";
-  }, "收到 session.step.started 必須能將既有工作恢復為 running");
+  }, "Step started must recover existing running work");
 
-  // 收到 session.text.delta 維持活躍
+  // Text progress retains activity.
   emit({
     id: "text_1",
     type: "session.text.delta",
@@ -337,7 +345,7 @@ test("opencode-plugin: 啟動前已活躍/斷線期間持續工作依真實 v2.0
   await sleep(50);
   assert.equal(readJson(stateFile).sessions.ses_ongoing?.status, "running");
 
-  // 收到 session.execution.failed 結束
+  // Execution failure ends activity.
   emit({
     id: "fail_1",
     type: "session.execution.failed",
@@ -348,10 +356,10 @@ test("opencode-plugin: 啟動前已活躍/斷線期間持續工作依真實 v2.0
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_ongoing === undefined;
-  }, "session.execution.failed 必須移除該 session");
+  }, "Execution failed must remove the session");
 });
 
-test("opencode-plugin: 同步返回 AsyncIterable 可正常運作", async (t) => {
+test("opencode-plugin: accepts a synchronously returned AsyncIterable", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-sync-", t);
   let queue = [];
   let notify = null;
@@ -391,10 +399,10 @@ test("opencode-plugin: 同步返回 AsyncIterable 可正常運作", async (t) =>
   queue.push({ id: "e1", type: "session.execution.started", data: { sessionID: "ses_sync" } });
   if (notify) notify();
 
-  await waitFor(() => readJson(stateFile).sessions.ses_sync?.status === "running", "同步 AsyncIterable 必須正常處理事件");
+  await waitFor(() => readJson(stateFile).sessions.ses_sync?.status === "running", "Synchronous AsyncIterable must process events");
 });
 
-test("opencode-plugin: 防護特殊 session ID key 與 cleanup 可取消退避計時器", async (t) => {
+test("opencode-plugin: rejects prototype keys and cleanup cancels backoff timers", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-proto-", t);
   const { context, emit, setStreamFail } = createMockOpenCodeContext({ directory: "/project/proto" });
 
@@ -403,7 +411,7 @@ test("opencode-plugin: 防護特殊 session ID key 與 cleanup 可取消退避�
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 特殊原型屬性名稱注入測試
+  // Reject prototype-property injection.
   emit({ id: "p1", type: "session.execution.started", data: { sessionID: "__proto__" } });
   emit({ id: "p2", type: "session.execution.started", data: { sessionID: "constructor" } });
   emit({ id: "p3", type: "session.execution.started", data: { sessionID: "prototype" } });
@@ -415,17 +423,17 @@ test("opencode-plugin: 防護特殊 session ID key 與 cleanup 可取消退避�
   assert.equal(Object.hasOwn(state.sessions, "constructor"), false);
   assert.equal(Object.hasOwn(state.sessions, "prototype"), false);
 
-  // 測試 cleanup 可立即取消正在退避中的計時器，絕不懸掛
+  // Cleanup must cancel a pending backoff without hanging.
   setStreamFail(true);
-  await sleep(50); // 進入退避狀態
+  await sleep(50); // Enter backoff.
 
   const cleanupStart = Date.now();
   await cleanup();
   const cleanupDuration = Date.now() - cleanupStart;
-  assert.equal(cleanupDuration < 500, true, `cleanup 必須立即取消退避計時器（耗時: ${cleanupDuration}ms）`);
+  assert.equal(cleanupDuration < 500, true, `Cleanup must promptly cancel backoff (took ${cleanupDuration} ms)`);
 });
 
-test("opencode-plugin: session.deleted 正確移除 session", async (t) => {
+test("opencode-plugin: session.deleted removes the session", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-del-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/del" });
 
@@ -438,10 +446,10 @@ test("opencode-plugin: session.deleted 正確移除 session", async (t) => {
   await waitFor(() => readJson(stateFile).sessions.ses_del?.status === "running");
 
   emit({ id: "e2", type: "session.deleted", created: Date.now(), data: { sessionID: "ses_del" } });
-  await waitFor(() => readJson(stateFile).sessions.ses_del === undefined, "session.deleted 必須移除該 session");
+  await waitFor(() => readJson(stateFile).sessions.ses_del === undefined, "Session deleted must remove the session");
 });
 
-test("opencode-plugin: 不持久化敏感錯誤訊息或原始 payload 資料", async (t) => {
+test("opencode-plugin: never persists sensitive errors or raw payloads", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-sensitive-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/sec" });
 
@@ -476,7 +484,7 @@ test("opencode-plugin: 不持久化敏感錯誤訊息或原始 payload 資料", 
   assert.equal(parsed.sessions.ses_sec.prompt, undefined);
 });
 
-test("opencode-plugin: 懸掛或清理後遲到的事件不阻礙關閉且不重建狀態檔", { timeout: 3000 }, async (t) => {
+test("opencode-plugin: hung or late events cannot block cleanup or recreate snapshots", { timeout: 3000 }, async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-late-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/late" });
 
@@ -488,17 +496,17 @@ test("opencode-plugin: 懸掛或清理後遲到的事件不阻礙關閉且不重
 
   const start = Date.now();
   await cleanup();
-  assert.equal(Date.now() - start < 1000, true, "清理過程不得懸掛阻斷");
-  assert.equal(existsSync(stateFile), false, "清理後狀態檔必須被刪除");
+  assert.equal(Date.now() - start < 1000, true, "Cleanup must not hang");
+  assert.equal(existsSync(stateFile), false, "Cleanup must remove the snapshot");
 
-  // 清理後遲到的事件發出
+  // Emit a late event after cleanup.
   emit({ id: "e_late", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_late" } });
   await sleep(100);
 
-  assert.equal(existsSync(stateFile), false, "清理後遲到的事件絕不得重建狀態檔");
+  assert.equal(existsSync(stateFile), false, "Late events must not recreate a cleaned snapshot");
 });
 
-test("opencode-plugin: 事件串流持續失敗時停止重新整理心跳並在讀取端過期", async (t) => {
+test("opencode-plugin: persistent stream failure is not process death; heartbeats and Busy remain", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-expire-", t);
   const { context, emit, setStreamFail } = createMockOpenCodeContext({ directory: "/project/expire" });
 
@@ -507,32 +515,32 @@ test("opencode-plugin: 事件串流持續失敗時停止重新整理心跳並在
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 產生活躍 session
+  // Start an active session.
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_expire" } });
   await waitFor(() => readJson(stateFile).sessions.ses_expire?.status === "running");
 
-  // 初始狀態為 working
+  // Establish initial working status.
   let status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 100 });
   assert.equal(status.working, true);
   assert.equal(status.activeSessions.includes("ses_expire"), true);
 
   const firstHeartbeat = readJson(stateFile).heartbeat;
 
-  // 模擬串流中斷且重連持續失敗
+  // Fail the stream and subsequent subscription attempts.
   setStreamFail(true);
 
-  // 等待心跳過期時間推進
+  // Wait beyond the reader's stale-heartbeat threshold.
   await sleep(150);
 
   const stateAfterFailures = readJson(stateFile);
-  assert.equal(stateAfterFailures.heartbeat, firstHeartbeat, "串流持續失敗時不得重新整理心跳");
+  assert.ok(stateAfterFailures.heartbeat > firstHeartbeat, "A live plugin must keep heartbeating");
 
-  // 心跳過期後讀取端必須視為 working: false
+  // Stream failure must not remove protection from running work.
   status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 100 });
-  assert.equal(status.working, false, "心跳逾時後讀取端必須判定為非 working");
+  assert.equal(status.working, true, "Stream failure must not be interpreted as idle");
 });
 
-test("opencode-plugin: 忽略無效/畸形事件且不更動 sessions 或心跳", async (t) => {
+test("opencode-plugin: malformed or unrelated events do not change sessions or heartbeat", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-val-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/val" });
 
@@ -549,10 +557,10 @@ test("opencode-plugin: 忽略無效/畸形事件且不更動 sessions 或心跳"
     null,
     undefined,
     {},
-    { type: "session.execution.started" }, // 缺少 data
+    { type: "session.execution.started" }, // Missing data.
     { type: "session.execution.started", data: null },
-    { type: "session.execution.started", data: { sessionID: 12345 } }, // 非字串
-    { type: "session.execution.started", data: { sessionID: "invalid_prefix" } }, // 非 ses 開頭
+    { type: "session.execution.started", data: { sessionID: 12345 } }, // Not a string.
+    { type: "session.execution.started", data: { sessionID: "invalid_prefix" } }, // Invalid prefix.
     { type: "unrelated.event", data: { sessionID: "ses_other" } },
   ];
 
@@ -563,11 +571,11 @@ test("opencode-plugin: 忽略無效/畸形事件且不更動 sessions 或心跳"
   await sleep(60);
 
   const snapshotAfter = readJson(stateFile);
-  assert.deepEqual(snapshotAfter.sessions, snapshotBefore.sessions, "無效或無關事件不得變更 sessions 狀態");
-  assert.equal(snapshotAfter.heartbeat, snapshotBefore.heartbeat, "無效或無關事件不得更新心跳");
+  assert.deepEqual(snapshotAfter.sessions, snapshotBefore.sessions, "Invalid events must not change sessions");
+  assert.equal(snapshotAfter.heartbeat, snapshotBefore.heartbeat, "Invalid events must not update the heartbeat");
 });
 
-test("opencode-plugin: 重複 setup 與清理可恢復行程接聽程式數量且不更動信號", async (t) => {
+test("opencode-plugin: repeated setup/cleanup restores listener counts without changing signal handlers", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-listeners-", t);
   const exitBefore = process.listenerCount("exit");
   const sigtermBefore = process.listenerCount("SIGTERM");
@@ -577,18 +585,18 @@ test("opencode-plugin: 重複 setup 與清理可恢復行程接聽程式數量�
   for (let i = 0; i < 3; i++) {
     const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 100 });
     defer(cleanup);
-    assert.equal(process.listenerCount("SIGTERM"), sigtermBefore, "外掛不得加入 SIGTERM 接聽程式");
-    assert.equal(process.listenerCount("SIGINT"), sigintBefore, "外掛不得加入 SIGINT 接聽程式");
+    assert.equal(process.listenerCount("SIGTERM"), sigtermBefore, "Plugin must not add SIGTERM handlers");
+    assert.equal(process.listenerCount("SIGINT"), sigintBefore, "Plugin must not add SIGINT handlers");
     await cleanup();
   }
 
-  // 經過多次清理後，接聽程式數量必須完全復原
-  assert.equal(process.listenerCount("exit"), exitBefore, "清理後 exit 接聽程式數量必須復原");
+  // Multiple cleanups must restore the original listener count.
+  assert.equal(process.listenerCount("exit"), exitBefore, "Cleanup must restore exit listener count");
   assert.equal(process.listenerCount("SIGTERM"), sigtermBefore);
   assert.equal(process.listenerCount("SIGINT"), sigintBefore);
 });
 
-test("opencode-plugin: shell.started 標為活躍，shell.ended 結束活躍；在輪次中執行時不造成假 idle", async (t) => {
+test("opencode-plugin: shell lifecycle tracks activity without making a containing turn falsely idle", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-shell-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/shell" });
 
@@ -597,14 +605,14 @@ test("opencode-plugin: shell.started 標為活躍，shell.ended 結束活躍；�
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 1. 獨立 shell 指令：started -> running；ended -> idle (自 sessions 移除)
+  // Independent shell: started -> running, ended -> idle.
   emit({ id: "sh1", type: "session.shell.started", created: Date.now(), data: { sessionID: "ses_sh_standalone" } });
   await waitFor(() => readJson(stateFile).sessions.ses_sh_standalone?.status === "running");
 
   emit({ id: "sh2", type: "session.shell.ended", created: Date.now(), data: { sessionID: "ses_sh_standalone" } });
-  await waitFor(() => readJson(stateFile).sessions.ses_sh_standalone === undefined, "獨立 shell 結束後必須轉為 idle");
+  await waitFor(() => readJson(stateFile).sessions.ses_sh_standalone === undefined, "Independent shell completion must become idle");
 
-  // 2. 輪次中執行的 shell 指令：輪次開始 -> shell 開始 -> shell 結束 (不可假 idle) -> 輪次結束
+  // A shell finishing inside an active turn must not make the turn idle.
   emit({ id: "ex1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_sh_turn" } });
   await waitFor(() => readJson(stateFile).sessions.ses_sh_turn?.status === "running");
 
@@ -614,13 +622,13 @@ test("opencode-plugin: shell.started 標為活躍，shell.ended 結束活躍；�
 
   emit({ id: "sh4", type: "session.shell.ended", created: Date.now(), data: { sessionID: "ses_sh_turn" } });
   await sleep(40);
-  assert.equal(readJson(stateFile).sessions.ses_sh_turn?.status, "running", "輪次內 shell.ended 絕不得導致假 idle");
+  assert.equal(readJson(stateFile).sessions.ses_sh_turn?.status, "running", "Shell ended must not clear an active turn");
 
   emit({ id: "ex2", type: "session.execution.succeeded", created: Date.now(), data: { sessionID: "ses_sh_turn" } });
-  await waitFor(() => readJson(stateFile).sessions.ses_sh_turn === undefined, "執行輪次成功完成後轉為 idle");
+  await waitFor(() => readJson(stateFile).sessions.ses_sh_turn === undefined, "Successful execution becomes idle");
 });
 
-test("opencode-plugin: compaction.started/delta 標為活躍，compaction.ended/failed 結束活躍；涵蓋 delta 與輪次組合", async (t) => {
+test("opencode-plugin: compaction started/delta and ended/failed compose correctly with execution", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-compact-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/compact" });
 
@@ -629,7 +637,7 @@ test("opencode-plugin: compaction.started/delta 標為活躍，compaction.ended/
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 1. 自動/獨立 compaction：started -> delta -> ended
+  // Compaction lifecycle: started -> delta -> ended.
   emit({ id: "c1", type: "session.compaction.started", created: Date.now(), data: { sessionID: "ses_comp_auto" } });
   await waitFor(() => readJson(stateFile).sessions.ses_comp_auto?.status === "running");
 
@@ -638,16 +646,16 @@ test("opencode-plugin: compaction.started/delta 標為活躍，compaction.ended/
   assert.equal(readJson(stateFile).sessions.ses_comp_auto?.status, "running");
 
   emit({ id: "c3", type: "session.compaction.ended", created: Date.now(), data: { sessionID: "ses_comp_auto" } });
-  await waitFor(() => readJson(stateFile).sessions.ses_comp_auto === undefined, "獨立 compaction.ended 後必須轉為 idle");
+  await waitFor(() => readJson(stateFile).sessions.ses_comp_auto === undefined, "Independent compaction completion becomes idle");
 
-  // 2. compaction.failed 結束
+  // Failed compaction also ends activity.
   emit({ id: "c4", type: "session.compaction.started", created: Date.now(), data: { sessionID: "ses_comp_fail" } });
   await waitFor(() => readJson(stateFile).sessions.ses_comp_fail?.status === "running");
 
   emit({ id: "c5", type: "session.compaction.failed", created: Date.now(), data: { sessionID: "ses_comp_fail" } });
-  await waitFor(() => readJson(stateFile).sessions.ses_comp_fail === undefined, "compaction.failed 後必須轉為 idle");
+  await waitFor(() => readJson(stateFile).sessions.ses_comp_fail === undefined, "Failed compaction becomes idle");
 
-  // 3. 輪次中觸發 compaction 與 tool.input.delta：compaction 結束不發生假 idle
+  // Compaction finishing within a turn must not clear the turn.
   emit({ id: "ex1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_comp_turn" } });
   await waitFor(() => readJson(stateFile).sessions.ses_comp_turn?.status === "running");
 
@@ -659,68 +667,66 @@ test("opencode-plugin: compaction.started/delta 標為活躍，compaction.ended/
 
   emit({ id: "c8", type: "session.compaction.ended", created: Date.now(), data: { sessionID: "ses_comp_turn" } });
   await sleep(40);
-  assert.equal(readJson(stateFile).sessions.ses_comp_turn?.status, "running", "輪次中 compaction.ended 不得造成假 idle");
+  assert.equal(readJson(stateFile).sessions.ses_comp_turn?.status, "running", "Compaction ended must not clear an active turn");
 
   emit({ id: "ex2", type: "session.execution.succeeded", created: Date.now(), data: { sessionID: "ses_comp_turn" } });
-  await waitFor(() => readJson(stateFile).sessions.ses_comp_turn === undefined, "輪次結束後轉為 idle");
+  await waitFor(() => readJson(stateFile).sessions.ses_comp_turn === undefined, "Execution completion becomes idle");
 });
 
-test("opencode-plugin: 當 ctx.event.subscribe 不存在時在寫入狀態檔前安全退出且不留檔案", async (t) => {
+test("opencode-plugin: missing ctx.event.subscribe exits without creating a snapshot", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-nosub-", t);
   const contextWithoutSubscribe = {
     location: { directory: "/project/nosub" },
-    event: {}, // 沒有 subscribe
+    event: {}, // No subscribe method.
   };
 
   const cleanup = await plugin.setup(contextWithoutSubscribe, { stateDir: dir });
   defer(cleanup);
 
   const jsonFiles = readdirSync(dir).filter((f) => f.endsWith(".json"));
-  assert.equal(jsonFiles.length, 0, "event.subscribe 不存在時絕不得在磁碟建立任何狀態檔");
+  assert.equal(jsonFiles.length, 0, "Missing subscription support must not create files");
 
-  // cleanup 必須能正常呼叫且不拋出錯誤
+  // Cleanup must remain callable.
   await assert.doesNotReject(async () => {
     await cleanup();
   });
 });
 
-test("opencode-plugin: 短暫斷線重連後沉默長任務受租約保護維持活躍（不被瞬間放睡）", async (t) => {
+test("opencode-plugin: silent long work remains active after a brief disconnect", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-lease-silent-", t);
   const { context, emit, setStreamFail, getSubscribeCount } = createMockOpenCodeContext({ directory: "/project/lease-silent" });
 
-  // 設定租約為 500ms
-  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 30, sessionLeaseMs: 500 });
+  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 30 });
   defer(cleanup);
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 啟動一個長任務
+  // Start long work.
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_silent" } });
   await waitFor(() => readJson(stateFile).sessions.ses_silent?.status === "running");
 
-  // 模擬短暫斷線 (50ms)
+  // Disconnect briefly (50 ms).
   setStreamFail(true);
   await sleep(50);
 
-  // 重新連上（重連後該 session 為沉默長任務，未立即發送新事件）
+  // Reconnect without new activity events.
   setStreamFail(false);
-  await waitFor(() => getSubscribeCount() >= 2, "重連必須確實觸發第二次訂閱");
+  await waitFor(() => getSubscribeCount() >= 2, "Reconnect must trigger a second subscription");
 
-  // 驗證重連後在租約期限內，該任務仍被視為活躍 running，守護進程讀取端判定為 working: true
+  // The silent task remains running.
   const state = readJson(stateFile);
-  assert.equal(state.sessions.ses_silent?.status, "running", "租約期間沉默長任務必須保留 running 狀態");
+  assert.equal(state.sessions.ses_silent?.status, "running", "Silent long work must remain running");
 
   const status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 500 });
-  assert.equal(status.working, true, "重連後沉默長任務在租約內不得被瞬間放睡");
+  assert.equal(status.working, true, "Reconnect must not release silent work");
   assert.equal(status.activeSessions.includes("ses_silent"), true);
 });
 
-test("opencode-plugin: 斷線期間完成之任務在租約過期後自動清理幽靈 session 並允許休眠", async (t) => {
+test("opencode-plugin: authoritative API recovers completion during disconnect", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-lease-expire-", t);
-  const { context, emit, setStreamFail, getSubscribeCount } = createMockOpenCodeContext({ directory: "/project/lease-expire" });
+  const { context, emit, updateApi, setStreamFail, getSubscribeCount } = createMockOpenCodeContext({ directory: "/project/lease-expire" });
 
-  // 設定租約為 120ms
-  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 25, sessionLeaseMs: 120 });
+  const cleanup = await plugin.setup(context, { stateDir: dir, pollIntervalMs: 25 });
   defer(cleanup);
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
@@ -728,26 +734,27 @@ test("opencode-plugin: 斷線期間完成之任務在租約過期後自動清理
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_ghost" } });
   await waitFor(() => readJson(stateFile).sessions.ses_ghost?.status === "running");
 
-  // 模擬斷線
+  // Disconnect.
   setStreamFail(true);
   await sleep(40);
+  updateApi({ type: "session.execution.succeeded", data: { sessionID: "ses_ghost" } });
 
-  // 重連，該任務在斷線期間已完成，重連後不再有任何事件
+  // Complete work during disconnect; no terminal event will be replayed.
   setStreamFail(false);
-  await waitFor(() => getSubscribeCount() >= 2, "重連必須確實觸發第二次訂閱");
+  await waitFor(() => getSubscribeCount() >= 2, "Reconnect must trigger a second subscription");
 
-  // 等待超過 120ms 租約過期
+  // Confirm completion through the API without another event.
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_ghost === undefined && Object.keys(s.sessions).length === 0;
-  }, "租約到期後未獲後續事件之幽靈 session 必須被自動清除", 1000);
+  }, "Confirmed completion must remove the session", 1000);
 
   const status = getOpenCodeStatus({ opencodeDir: dir, heartbeatTimeoutMs: 500 });
-  assert.equal(status.working, false, "幽靈 session 過期清理後讀取端必須允許休眠");
+  assert.equal(status.working, false, "Confirmed completion must allow sleep");
   assert.equal(status.activeSessions.length, 0);
 });
 
-test("opencode-plugin: 首次 iterator.next 待命、錯誤或 EOF 前不標記 healthy 亦不刷新 heartbeat", async (t) => {
+test("opencode-plugin: pending or failed first iterator.next does not stop process heartbeats", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-first-event-", t);
   let nextStarted = false;
   let resolveNext = null;
@@ -777,25 +784,23 @@ test("opencode-plugin: 首次 iterator.next 待命、錯誤或 EOF 前不標記 
   defer(cleanup);
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
-  await waitFor(() => nextStarted, "必須觸發首次 next 呼叫");
+  await waitFor(() => nextStarted, "The first next call must occur");
 
   const initialHeartbeat = readJson(stateFile).heartbeat;
 
-  // 在首次 next 懸掛待命期間等待數個 poll 週期 (80ms)
+  // Wait several poll cycles while the first next is pending.
   await sleep(80);
 
-  // 驗證心跳在此待命期間絕無被刷新
-  assert.equal(readJson(stateFile).heartbeat, initialHeartbeat, "首次收到事件前絕不得刷新心跳");
+  assert.ok(readJson(stateFile).heartbeat > initialHeartbeat, "Heartbeats must continue before any stream event");
 
-  // 首次 next 拋出錯誤
-  resolveNext.reject(new Error("連線失敗"));
+  // Fail the first next call.
+  resolveNext.reject(new Error("Connection failed"));
   await sleep(50);
 
-  // 驗證心跳依然沒有被刷新
-  assert.equal(readJson(stateFile).heartbeat, initialHeartbeat, "首次 next 失敗後絕不得刷新心跳");
+  assert.ok(readJson(stateFile).heartbeat > initialHeartbeat, "Stream failure is not process death");
 });
 
-test("opencode-plugin: 重複慢速 EOF/錯誤下退避時間必須持續累積不被重置", async (t) => {
+test("opencode-plugin: repeated slow EOF/errors accumulate backoff instead of resetting it", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-slow-backoff-", t);
   let subscribeAttempts = 0;
   const attemptTimestamps = [];
@@ -810,7 +815,7 @@ test("opencode-plugin: 重複慢速 EOF/錯誤下退避時間必須持續累積�
           [Symbol.asyncIterator]() {
             return {
               async next() {
-                // 每次連線皆慢速等待 60ms 後正常 EOF（從未收到任何有效 event）
+                // Each connection ends after 60 ms without a valid event.
                 await sleep(60);
                 return { done: true, value: undefined };
               },
@@ -827,20 +832,20 @@ test("opencode-plugin: 重複慢速 EOF/錯誤下退避時間必須持續累積�
   const cleanup = await plugin.setup(slowFailContext, { stateDir: dir, pollIntervalMs: 50 });
   defer(cleanup);
 
-  // 等待至少累積 3 次連線嘗試
-  await waitFor(() => attemptTimestamps.length >= 3, "慢速 EOF 下必須累積至第 3 次嘗試", 3000);
+  // Observe at least three connection attempts.
+  await waitFor(() => attemptTimestamps.length >= 3, "Slow EOF must eventually retry three times", 3000);
 
-  // 驗證嘗試次數在合理時間窗內受到指數退避之約束（不得緊密重試）
-  assert.equal(subscribeAttempts >= 3, true, "必須觸發至少 3 次重試嘗試");
-  assert.equal(subscribeAttempts <= 5, true, `慢速 EOF 下退避必須累積，不得重置（實際嘗試次數: ${subscribeAttempts}）`);
+  // Exponential backoff bounds retry frequency.
+  assert.equal(subscribeAttempts >= 3, true, "At least three attempts must occur");
+  assert.equal(subscribeAttempts <= 5, true, `Slow EOF must not reset backoff (attempts: ${subscribeAttempts})`);
 
-  // 驗證相鄰嘗試間距逐步拉長（無條件執行斷言）
+  // Assert that successive attempt intervals grow.
   const gap1 = attemptTimestamps[1] - attemptTimestamps[0];
   const gap2 = attemptTimestamps[2] - attemptTimestamps[1];
-  assert.equal(gap2 > gap1, true, `第 2 次間距 (${gap2}ms) 必須大於第 1 次間距 (${gap1}ms)`);
+  assert.equal(gap2 > gap1, true, `Second interval (${gap2} ms) must exceed first (${gap1} ms)`);
 });
 
-test("opencode-plugin: 首筆事件為畸形（null、{}、空字串 type）時不得標健康、不得刷新心跳且退避持續累積", async (t) => {
+test("opencode-plugin: malformed first events cannot create activity; valid events after reconnect recover", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-malformed-first-", t);
   const { context, emit, closeStream, getSubscribeCount } = createMockOpenCodeContext({
     directory: "/project/malformed",
@@ -853,7 +858,7 @@ test("opencode-plugin: 首筆事件為畸形（null、{}、空字串 type）時�
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
   const initialHeartbeat = readJson(stateFile).heartbeat;
 
-  // 發射各種畸形首筆事件
+  // Emit malformed first events.
   emit(null);
   emit({});
   emit({ type: "" });
@@ -862,16 +867,15 @@ test("opencode-plugin: 首筆事件為畸形（null、{}、空字串 type）時�
 
   await sleep(80);
 
-  // 驗證心跳在此期間絕無被刷新
-  assert.equal(readJson(stateFile).heartbeat, initialHeartbeat, "畸形首筆事件絕不得刷新心跳");
+  assert.deepEqual(readJson(stateFile).sessions, {}, "Malformed events must not create activity");
 
-  // 關閉串流觸發 EOF
+  // Close the stream with EOF.
   closeStream();
 
-  // 驗證必須觸發重新連線
-  await waitFor(() => getSubscribeCount() >= 2, "畸形事件後串流結束必須觸發重新連線");
+  // Observe an actual reconnection.
+  await waitFor(() => getSubscribeCount() >= 2, "EOF after malformed events must reconnect");
 
-  // 在重連串流發射合法首筆事件
+  // Emit a valid event on the new stream.
   emit({
     id: "ok_1",
     type: "session.execution.started",
@@ -882,10 +886,10 @@ test("opencode-plugin: 首筆事件為畸形（null、{}、空字串 type）時�
   await waitFor(() => {
     const s = readJson(stateFile);
     return s.sessions.ses_valid_after_retry?.status === "running" && s.heartbeat > initialHeartbeat;
-  }, "收到合法首筆事件後必須記錄 session 並更新心跳");
+  }, "Valid events must record activity and update the heartbeat");
 });
 
-test("opencode-plugin: execution 終止時自動清除 compaction 狀態防止孤立殘留", async (t) => {
+test("opencode-plugin: execution termination also clears orphaned compaction activity", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-compact-clear-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/compact-clear" });
 
@@ -894,23 +898,23 @@ test("opencode-plugin: execution 終止時自動清除 compaction 狀態防止�
 
   const stateFile = join(dir, readdirSync(dir).find((f) => f.endsWith(".json")));
 
-  // 1. execution 開始
+  // Start execution.
   emit({ id: "e1", type: "session.execution.started", created: Date.now(), data: { sessionID: "ses_cc" } });
   await waitFor(() => readJson(stateFile).sessions.ses_cc?.status === "running");
 
-  // 2. compaction 開始
+  // Start compaction.
   emit({ id: "c1", type: "session.compaction.started", created: Date.now(), data: { sessionID: "ses_cc" } });
   await sleep(30);
   assert.equal(readJson(stateFile).sessions.ses_cc?.status, "running");
 
-  // 3. execution 失敗終止，未發射 compaction.ended
+  // Fail execution without emitting compaction.ended.
   emit({ id: "e2", type: "session.execution.failed", created: Date.now(), data: { sessionID: "ses_cc" } });
 
-  // 驗證：因 compaction 僅存在於 execution 內，execution 終止時 compaction 必須一併清除，session 轉為 idle
-  await waitFor(() => readJson(stateFile).sessions.ses_cc === undefined, "execution 終止必須一併清理 compaction 狀態");
+  // Compaction belongs to the terminated execution, so the session becomes idle.
+  await waitFor(() => readJson(stateFile).sessions.ses_cc === undefined, "Execution termination must also clear compaction");
 });
 
-test("opencode-plugin: shell.failed 終止 shell 活躍狀態", async (t) => {
+test("opencode-plugin: shell.failed ends shell activity", async (t) => {
   const { dir, defer } = createTestDir("opencode-plug-shell-fail-", t);
   const { context, emit } = createMockOpenCodeContext({ directory: "/project/shell-fail" });
 
@@ -923,5 +927,5 @@ test("opencode-plugin: shell.failed 終止 shell 活躍狀態", async (t) => {
   await waitFor(() => readJson(stateFile).sessions.ses_sh_fail?.status === "running");
 
   emit({ id: "sh2", type: "session.shell.failed", created: Date.now(), data: { sessionID: "ses_sh_fail" } });
-  await waitFor(() => readJson(stateFile).sessions.ses_sh_fail === undefined, "shell.failed 必須終止 shell 活躍狀態");
+  await waitFor(() => readJson(stateFile).sessions.ses_sh_fail === undefined, "Shell failed must end shell activity");
 });

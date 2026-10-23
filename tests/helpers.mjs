@@ -34,10 +34,10 @@ export async function waitFor(condition, message, timeoutMs = 5000, stepMs = 50)
     }
     await sleep(stepMs);
   }
-  const detail = lastError ? `（最後錯誤: ${lastError.message ?? lastError}）` : "";
+  const detail = lastError ? ` (last error: ${lastError.message ?? lastError})` : "";
   const failureMsg = message
     ? `${message}${detail}`
-    : `等待條件逾時（超過 ${timeoutMs} 毫秒）${detail}`;
+    : `Condition timed out after ${timeoutMs} ms${detail}`;
   throw new Error(failureMsg, { cause: lastError });
 }
 
@@ -71,8 +71,33 @@ export function createMockOpenCodeContext(options = {}) {
   const listeners = new Set();
   let streamFail = options.streamFail ?? false;
   let subscribeCount = 0;
+  const sessions = new Map();
+  const waiters = new Set();
+  let apiFail = false;
+
+  const updateApi = (event) => {
+    const id = event?.data?.sessionID;
+    if (typeof id !== "string" || !id.startsWith("ses")) return;
+    const item = sessions.get(id) ?? { execution: false, compaction: false, messages: [] };
+    const type = event.type;
+    if (/^session\.(execution|retry|step|text|reasoning|tool)\./.test(type)) {
+      item.execution = !["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].includes(type);
+      if (!item.execution) item.compaction = false;
+    }
+    if (type.startsWith("session.compaction.")) item.compaction = !/\.(ended|failed)$/.test(type);
+    if (type === "session.shell.started") item.messages.push({ type: "shell", shellID: event.data.shell?.id ?? `sh_${id}`, status: "running" });
+    if (/^session\.shell\.(ended|failed)$/.test(type)) {
+      for (const message of item.messages) {
+        if (!event.data.shell?.id || message.shellID === event.data.shell.id) message.status = "exited";
+      }
+    }
+    sessions.set(id, item);
+    if (type === "session.deleted") sessions.delete(id);
+    for (const notify of [...waiters]) notify();
+  };
 
   const emit = (event) => {
+    updateApi(event);
     for (const listener of listeners) {
       listener(event);
     }
@@ -88,7 +113,7 @@ export function createMockOpenCodeContext(options = {}) {
     streamFail = val;
     if (val) {
       for (const listener of listeners) {
-        listener(null, new Error("事件串流連線失敗"));
+        listener(null, new Error("Event stream connection failed"));
       }
     }
   };
@@ -98,12 +123,33 @@ export function createMockOpenCodeContext(options = {}) {
     session: {
       hook: () => ({ dispose: () => {} }),
       get: async () => ({ id: "mock" }),
+      list: async () => {
+        if (apiFail) throw new Error("Status API failed");
+        return { data: [...sessions.keys()].map(id => ({ id })), cursor: {} };
+      },
+      context: async ({ sessionID }) => {
+        if (apiFail) throw new Error("Status API failed");
+        return structuredClone(sessions.get(sessionID)?.messages ?? []);
+      },
+      wait: ({ sessionID }, { signal } = {}) => new Promise((resolve, reject) => {
+        const notify = () => {
+          const item = sessions.get(sessionID);
+          if (!signal?.aborted && !apiFail && (item?.execution || item?.compaction)) return;
+          waiters.delete(notify);
+          signal?.removeEventListener("abort", notify);
+          if (signal?.aborted || apiFail) reject(new Error("Status query aborted or failed"));
+          else resolve();
+        };
+        waiters.add(notify);
+        signal?.addEventListener("abort", notify, { once: true });
+        notify();
+      }),
     },
     event: {
       subscribe: (subOpts = {}) => {
         subscribeCount += 1;
         if (streamFail) {
-          throw new Error("事件串流連線失敗");
+          throw new Error("Event stream connection failed");
         }
         let queue = [];
         let notify = null;
@@ -187,7 +233,18 @@ export function createMockOpenCodeContext(options = {}) {
     },
   };
 
-  return { context, emit, closeStream, setStreamFail, getSubscribeCount: () => subscribeCount };
+  return {
+    context,
+    emit,
+    closeStream,
+    setStreamFail,
+    updateApi,
+    setApiFail: (value) => {
+      apiFail = value;
+      for (const notify of [...waiters]) notify();
+    },
+    getSubscribeCount: () => subscribeCount,
+  };
 }
 
 export const mockSnapshot = (sessions = {}, overrides = {}) => ({
@@ -202,12 +259,12 @@ export const mockSnapshot = (sessions = {}, overrides = {}) => ({
 export async function waitForProcessExit(proc, timeoutMs = 5000) {
   if (!proc) return;
   const message = proc.pid
-    ? `行程 PID ${proc.pid} 未能在 ${timeoutMs} 毫秒內退出`
-    : `行程未能在 ${timeoutMs} 毫秒內退出`;
+    ? `Process PID ${proc.pid} did not exit within ${timeoutMs} ms`
+    : `Process did not exit within ${timeoutMs} ms`;
   await waitFor(
     () => {
       if (proc.spawnError) {
-        throw new Error(`行程啟動失敗: ${proc.spawnError.message}`, { cause: proc.spawnError });
+        throw new Error(`Process startup failed: ${proc.spawnError.message}`, { cause: proc.spawnError });
       }
       return proc.exitCode !== null || proc.signalCode !== null;
     },
@@ -227,8 +284,8 @@ export function spawnDaemon(env, defer) {
   defer(async () => {
     if (proc.spawnError || !proc.pid) {
       const message = proc.spawnError
-        ? `守護行程啟動失敗: ${proc.spawnError.message}`
-        : "守護行程啟動失敗: 行程無有效 PID";
+        ? `Daemon startup failed: ${proc.spawnError.message}`
+        : "Daemon startup failed: invalid PID";
       throw new Error(message, { cause: proc.spawnError });
     }
     if (proc.exitCode !== null || proc.signalCode !== null) return;
@@ -308,7 +365,7 @@ exit 0
     for (const pid of pids) {
       await waitFor(
         () => !isPidAlive(pid),
-        `caffeinate 行程 PID ${pid} 未能及時退出，終止清理以防刪除使用中目錄`,
+        `Caffeinate PID ${pid} did not exit; refusing to remove an in-use directory`,
         3000,
         25,
       );

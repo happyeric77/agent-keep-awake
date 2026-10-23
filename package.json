@@ -1,0 +1,6 @@
+{
+  "name": "agent-keep-awake",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./index.js"
+}
