@@ -1,28 +1,30 @@
 import { spawnSync } from "node:child_process";
 import { ensureAwake } from "./awake.mjs";
 import {
-  daemonAlive,
+  envFlag,
   loadDotEnv,
   modeEnabled,
   removeDaemonPid,
   writeDaemonPid,
 } from "./lib.mjs";
 import { appendLog } from "./log.mjs";
+import { getOpenCodeStatus } from "./opencode.mjs";
 
 loadDotEnv();
 
 const herdrBin = process.env.HERDR_BIN_PATH ?? "herdr";
 const pollIntervalMs = parseInt(process.env.KEEP_AWAKE_POLL_INTERVAL ?? "15", 10) * 1000;
+const opencodeEnabled = envFlag("OPENCODE_KEEP_AWAKE_ENABLED", true);
 const maxFailures = 3;
 let failures = 0;
 
 writeDaemonPid(process.pid);
-appendLog(`daemon started (pid ${process.pid}, poll ${pollIntervalMs}ms)`);
+appendLog(`Daemon started (PID ${process.pid}, poll interval ${pollIntervalMs} ms)`);
 
 function cleanupAndExit() {
   ensureAwake(false);
   removeDaemonPid();
-  appendLog("daemon stopped");
+  appendLog("Daemon stopped");
   process.exit(0);
 }
 
@@ -34,28 +36,37 @@ function anyAgentWorking(panes) {
 }
 
 function poll() {
+  const opencode = opencodeEnabled
+    ? getOpenCodeStatus()
+    : { working: false, instancesCount: 0, activeSessions: [] };
+
   const result = spawnSync(herdrBin, ["pane", "list"], { encoding: "utf8" });
   if (result.status !== 0) {
     failures += 1;
-    appendLog(
-      `herdr pane list failed (${result.status}): ${(result.stderr ?? result.stdout ?? "unknown error").trim().slice(0, 200)}`,
-    );
-    if (failures >= maxFailures) {
-      appendLog(`too many failures (${failures}), exiting`);
+    const errorMsg = (result.stderr ?? result.stdout ?? "Unknown error").trim().slice(0, 200);
+    appendLog(`herdr pane list failed (${result.status}): ${errorMsg}`);
+    if (failures >= maxFailures && !opencode.working) {
+      appendLog(`Too many failures (${failures}), exiting`);
       cleanupAndExit();
     }
+    ensureAwake(opencode.working && modeEnabled());
     return;
   }
   failures = 0;
+
   try {
     const parsed = JSON.parse(result.stdout);
     const panes = parsed?.result?.panes ?? parsed?.panes ?? [];
-    const working = anyAgentWorking(panes);
+    const herdrWorking = anyAgentWorking(panes);
+    const working = (herdrWorking || opencode.working) && modeEnabled();
     ensureAwake(working);
+    const ocDetails = opencode.working
+      ? `, opencode: working (${opencode.activeSessions.length} active)`
+      : "";
     appendLog(
       working
-        ? `working agents present, keeping awake`
-        : `no working agents (${panes.length} panes), allowing sleep`,
+        ? `Working agent detected (herdr: ${herdrWorking ? "working" : "idle"}${ocDetails}), staying awake`
+        : `No working agents (${panes.length} panes, ${opencode.instancesCount} opencode instances), allowing sleep`,
     );
   } catch (error) {
     appendLog(`pane list parse failed: ${error.message}`);

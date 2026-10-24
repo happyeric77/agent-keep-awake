@@ -17,6 +17,23 @@ on. When no agent is working, `caffeinate` is stopped and the Mac may sleep
 again. `blocked` panes are intentionally ignored: a blocked agent means you
 should be coming back.
 
+### OpenCode sessions (optional)
+
+Herdr pane state only describes the focused session. With the OpenCode plugin
+installed, the daemon also reads small per-instance snapshots written by
+`opencode-plugin.mjs`, so background sessions in any project keep the Mac awake:
+
+- The plugin follows `ctx.event.subscribe`, which covers every session in the
+  OpenCode process, not just the focused one.
+- A session stays awake while an execution, an independent shell, or a
+  compaction is running. Silence and reconnects never expire work; only
+  completion events, `session.deleted`, or process exit clear it.
+- After connecting or reconnecting, the newest sessions are re-checked with
+  `session.list`, `session.wait`, and `session.context` so work that started
+  while the event stream was down is not missed.
+- Snapshots contain only the process ID and running session IDs. The daemon
+  ignores snapshots from dead processes.
+
 ## Setup
 
 Install from GitHub:
@@ -51,6 +68,21 @@ To start it without restarting Herdr:
 ```
 herdr plugin action invoke herdr.keep-awake.enable
 ```
+
+### OpenCode (optional)
+
+Register the **directory**, not an individual file, in your OpenCode config:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["/path/to/agent-keep-awake"]
+}
+```
+
+OpenCode does not read Herdr's `.env`. Both sides default to
+`~/.local/state/herdr-keep-awake/opencode`; if you override `OPENCODE_STATE_DIR`,
+export it for both processes.
 
 ## Usage
 
@@ -107,6 +139,8 @@ All settings are read from `$CONFIG_DIR/.env`:
 | `KEEP_AWAKE_ENABLED` | `1` | Master on/off switch |
 | `KEEP_AWAKE_POLL_INTERVAL` | `15` | Poll interval in seconds |
 | `KEEP_AWAKE_DISPLAY` | `1` | Keep the display on too while working; set `0` to only prevent system sleep (saves battery) |
+| `OPENCODE_KEEP_AWAKE_ENABLED` | `1` | Also read snapshots written by the OpenCode plugin |
+| `OPENCODE_STATE_DIR` | `~/.local/state/herdr-keep-awake/opencode` | Shared snapshot directory; export for both Herdr and OpenCode |
 
 ## Limitations
 
@@ -115,6 +149,9 @@ All settings are read from `$CONFIG_DIR/.env`:
 - Closing the laptop lid still forces sleep regardless of `caffeinate`.
 - The daemon checks the *agent status* reported by Herdr; it cannot see
   in-flight work of an agent that Herdr still considers idle.
+- Without the OpenCode plugin, only Herdr panes are visible. With it, activity
+  from OpenCode processes is included, but a session whose start *and* finish
+  are both missed stays awake until process exit (it never causes a false idle).
 - Keeping the display on drains battery noticeably (the display is the most
   power-hungry component). Set `KEEP_AWAKE_DISPLAY=0` if you prefer battery
   life over a lit screen.
