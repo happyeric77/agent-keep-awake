@@ -28,9 +28,9 @@ installed, the daemon also reads small per-instance snapshots written by
 - A session stays awake while an execution, an independent shell, or a
   compaction is running. Silence and reconnects never expire work; only
   completion events, `session.deleted`, or process exit clear it.
-- After connecting or reconnecting, the newest sessions are re-checked with
+- After connecting or reconnecting, the 10 newest sessions are re-checked with
   `session.list`, `session.wait`, and `session.context` so work that started
-  while the event stream was down is not missed.
+  while the event stream was down can be recovered, subject to the limits below.
 - Snapshots contain only the process ID and running session IDs. The daemon
   ignores snapshots from dead processes.
 
@@ -149,9 +149,11 @@ All settings are read from `$CONFIG_DIR/.env`:
 - Closing the laptop lid still forces sleep regardless of `caffeinate`.
 - The daemon checks the *agent status* reported by Herdr; it cannot see
   in-flight work of an agent that Herdr still considers idle.
-- Without the OpenCode plugin, only Herdr panes are visible. With it, activity
-  from OpenCode processes is included, but a session whose start *and* finish
-  are both missed stays awake until process exit (it never causes a false idle).
+- Without the OpenCode plugin, only Herdr panes are visible. A missed Started
+  event can cause False Idle if recovery does not find the session (only the
+  10 newest are scanned), until another activity event arrives.
+- A tracked session with a missed completion stays Busy until `session.deleted`
+  or process exit. Failed snapshot writes retry every second, even in silence.
 - Keeping the display on drains battery noticeably (the display is the most
   power-hungry component). Set `KEEP_AWAKE_DISPLAY=0` if you prefer battery
   life over a lit screen.

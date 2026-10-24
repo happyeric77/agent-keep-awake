@@ -29,6 +29,7 @@ function writeSnapshot(filePath, pid, sessions) {
   try {
     writeFileSync(tmpPath, JSON.stringify({ pid, sessions }), "utf8");
     renameSync(tmpPath, filePath);
+    return true;
   } catch {
     try { unlinkSync(tmpPath); } catch { /* best effort */ }
   }
@@ -64,8 +65,7 @@ export const plugin = {
       const ids = [...sessions].filter(([, a]) => isActive(a)).map(([id]) => id).sort();
       const key = ids.join(",");
       if (key === published) return;
-      published = key;
-      writeSnapshot(stateFile, pid, ids);
+      if (writeSnapshot(stateFile, pid, ids)) published = key;
     };
 
     // A session found after (re)connecting may have started while events were
@@ -179,6 +179,8 @@ export const plugin = {
     };
 
     publish();
+    const publishRetry = setInterval(publish, 1000);
+    publishRetry.unref();
     void listen();
 
     const onExit = () => {
@@ -189,6 +191,7 @@ export const plugin = {
     return async () => {
       if (disposed) return;
       disposed = true;
+      clearInterval(publishRetry);
       process.removeListener("exit", onExit);
       if (controller) controller.abort();
       if (cancelDelay) cancelDelay();

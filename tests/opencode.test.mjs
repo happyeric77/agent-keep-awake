@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "../opencode-plugin.mjs";
@@ -23,8 +23,6 @@ function tempDir(t) {
   return dir;
 }
 
-// Minimal plugin context: a process-wide event stream plus the three session
-// calls used to recover work that started while the stream was down.
 function createContext({ listed = [], messages = {} } = {}) {
   const streams = new Set();
   const waits = new Map();
@@ -100,7 +98,6 @@ test("tracks background sessions, not only the focused one", async (t) => {
   mock.emit("session.execution.started", { sessionID: "ses_background" });
   await waitFor(() => app.status().working, "both sessions must be active");
   assert.deepEqual(app.snapshot().sessions, ["ses_background", "ses_focused"]);
-  assert.equal(app.status().working, true, "a shell ending inside a turn keeps it active");
   mock.emit("session.execution.succeeded", { sessionID: "ses_focused" });
   await waitFor(() => !app.status().activeSessions.includes("ses_focused"), "first turn ends");
   assert.equal(app.status().working, true, "the background session still works");
@@ -144,18 +141,21 @@ test("a discovered running shell stays awake until it ends", async (t) => {
   await waitFor(() => !app.status().working, "the ended shell clears");
 });
 
-test("instances share a PID but clean up only their own snapshot", async (t) => {
+test("instances retry failed writes in silence and clean up only their own snapshot", async (t) => {
   const mock = createContext();
   const dir = tempDir(t);
   const stopA = await plugin.setup(mock.context, { stateDir: dir, id: "a" });
   t.after(await plugin.setup(mock.context, { stateDir: dir, id: "b" }));
+  rmSync(join(dir, "b.json"));
+  mkdirSync(join(dir, "b.json")); // Block atomic rename without depending on permissions.
   mock.emit("session.execution.started", { sessionID: "ses_shared" });
   const written = (id) => JSON.parse(readFileSync(join(dir, `${id}.json`), "utf8")).sessions.length === 1;
-  await waitFor(() => written("a") && written("b"), "both instances publish");
+  await waitFor(() => written("a"), "the event was processed");
 
   await stopA();
+  rmSync(join(dir, "b.json"), { recursive: true });
+  await waitFor(() => getOpenCodeStatus({ opencodeDir: dir }).working, "silent retry publishes b");
   assert.deepEqual(readdirSync(dir), ["b.json"]);
-  assert.equal(getOpenCodeStatus({ opencodeDir: dir, isPidAlive: () => true }).working, true);
 });
 
 test("ignores snapshots from dead processes", (t) => {
