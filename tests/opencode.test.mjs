@@ -191,9 +191,9 @@ test("status command counts unique live sessions globally and prints nothing whe
   snapshot("b.json", ["ses_a"]);
   writeFileSync(join(dir, "broken.json"), "{");
   writeFileSync(join(dir, "dead.json"), JSON.stringify({ pid: 2147483647, sessions: ["ses_dead"] }));
-  assert.equal(run(), "OC: 1 active\n");
+  assert.equal(run(), "🖥️ OpenCode sessions: 1 active\n");
   snapshot("b.json", ["ses_a", "ses_b", "ses_c"]);
-  assert.equal(run(), "OC: 3 active\n");
+  assert.equal(run(), "🖥️ OpenCode sessions: 3 active\n");
   snapshot("a.json", []);
   snapshot("b.json", []);
   assert.equal(run(), "");
