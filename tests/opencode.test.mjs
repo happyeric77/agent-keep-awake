@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import plugin from "../opencode-plugin.mjs";
 import { getOpenCodeStatus } from "../opencode.mjs";
 
@@ -166,4 +168,34 @@ test("ignores snapshots from dead processes", (t) => {
   const status = getOpenCodeStatus({ opencodeDir: dir, isPidAlive: (pid) => pid === 222 });
   assert.deepEqual(status.activeSessions, ["ses_live"]);
   assert.equal(status.instancesCount, 1);
+});
+
+test("status command counts unique live sessions globally and prints nothing when idle", (t) => {
+  const dir = tempDir(t);
+  const command = fileURLToPath(new URL("../opencode-status.mjs", import.meta.url));
+  const run = (stateDir = dir) => {
+    const result = spawnSync(process.execPath, [command], {
+      cwd: dir,
+      env: { ...process.env, OPENCODE_STATE_DIR: stateDir },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    return result.stdout;
+  };
+  const snapshot = (name, sessions) =>
+    writeFileSync(join(dir, name), JSON.stringify({ pid: process.pid, sessions }));
+
+  assert.equal(run(), "");
+  snapshot("a.json", ["ses_a"]);
+  snapshot("b.json", ["ses_a"]);
+  writeFileSync(join(dir, "broken.json"), "{");
+  writeFileSync(join(dir, "dead.json"), JSON.stringify({ pid: 2147483647, sessions: ["ses_dead"] }));
+  assert.equal(run(), "OC: 1 active\n");
+  snapshot("b.json", ["ses_a", "ses_b", "ses_c"]);
+  assert.equal(run(), "OC: 3 active\n");
+  snapshot("a.json", []);
+  snapshot("b.json", []);
+  assert.equal(run(), "");
+  assert.equal(run(join(dir, "missing")), "");
 });
