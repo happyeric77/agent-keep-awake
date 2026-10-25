@@ -6,5 +6,5 @@ const shells = activeShells.length;
 if (sessions) {
   const sessionLabel = sessions === 1 ? "session" : "sessions";
   const shellLabel = shells === 1 ? "shell" : "shells";
-  process.stdout.write(`🖥️ ${sessions} ${sessionLabel} · ${shells} ${shellLabel}\n`);
+  process.stdout.write(`OpenCode 🖥️ ${sessions} ${sessionLabel} · ${shells} ${shellLabel}\n`);
 }

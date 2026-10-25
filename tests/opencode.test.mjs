@@ -294,15 +294,15 @@ test("status command counts unique live sessions globally and prints nothing whe
   snapshot("b.json", ["ses_a"], ["sh_a"]);
   writeFileSync(join(dir, "broken.json"), "{");
   writeFileSync(join(dir, "dead.json"), JSON.stringify({ pid: 2147483647, sessions: ["ses_dead"] }));
-  assert.equal(run(), "🖥️ 1 session · 1 shell\n");
+  assert.equal(run(), "OpenCode 🖥️ 1 session · 1 shell\n");
   snapshot("b.json", ["ses_a", "ses_b", "ses_c"], ["sh_a", "sh_b", "sh_c"]);
-  assert.equal(run(), "🖥️ 3 sessions · 3 shells\n");
+  assert.equal(run(), "OpenCode 🖥️ 3 sessions · 3 shells\n");
   // Legacy files contain only sessions, and dead/malformed shells do not count.
   snapshot("a.json", ["ses_a"]);
   snapshot("b.json", ["ses_a"], ["invalid", "sh_ok"]);
-  assert.equal(run(), "🖥️ 1 session · 1 shell\n");
+  assert.equal(run(), "OpenCode 🖥️ 1 session · 1 shell\n");
   snapshot("b.json", ["ses_a"], []);
-  assert.equal(run(), "🖥️ 1 session · 0 shells\n");
+  assert.equal(run(), "OpenCode 🖥️ 1 session · 0 shells\n");
   snapshot("a.json", []);
   snapshot("b.json", []);
   assert.equal(run(), "");

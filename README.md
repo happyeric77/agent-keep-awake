@@ -112,7 +112,7 @@ Reload the configuration:
 herdr server reload-config
 ```
 
-When active sessions are detected, the right side of the top tab bar shows a compact count, such as `🖥️ 1 session · 2 shells`. The Shell count covers known OpenCode-managed Shells, deduplicated by ID across live-process snapshots, not arbitrary detached OS processes. When no Sessions are detected, the command produces no output and the indicator disappears. It works regardless of the currently selected Herdr workspace or project.
+When active sessions are detected, the right side of the top tab bar shows a compact count, such as `OpenCode 🖥️ 1 session · 2 shells`. The Shell count covers known OpenCode-managed Shells, deduplicated by ID across live-process snapshots, not arbitrary detached OS processes. When no Sessions are detected, the command produces no output and the indicator disappears. It works regardless of the currently selected Herdr workspace or project.
 
 The status command reads the same snapshots as the daemon, but runs independently: a display-command failure cannot change sleep prevention. If using a custom `OPENCODE_STATE_DIR`, also make it available to the status command's environment.
 
