@@ -24,10 +24,10 @@ function defaultStateDir() {
   return join(stateHome, "herdr-keep-awake", "opencode");
 }
 
-function writeSnapshot(filePath, pid, sessions) {
+function writeSnapshot(filePath, pid, sessions, shells) {
   const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    writeFileSync(tmpPath, JSON.stringify({ pid, sessions }), "utf8");
+    writeFileSync(tmpPath, JSON.stringify({ pid, sessions, shells }), "utf8");
     renameSync(tmpPath, filePath);
     return true;
   } catch {
@@ -64,9 +64,12 @@ export const plugin = {
     const publish = () => {
       if (disposed) return;
       const ids = [...sessions].filter(([, a]) => isActive(a)).map(([id]) => id).sort();
-      const key = ids.join(",");
+      const shells = [...shellOwners.keys()].sort();
+      // Publish even when the number of active Sessions stays the same:
+      // one Session can start or finish multiple background Shells.
+      const key = JSON.stringify([ids, shells]);
       if (key === published) return;
-      if (writeSnapshot(stateFile, pid, ids)) published = key;
+      if (writeSnapshot(stateFile, pid, ids, shells)) published = key;
     };
 
     // A session found after (re)connecting may have started while events were
