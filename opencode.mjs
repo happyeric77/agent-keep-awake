@@ -25,6 +25,7 @@ export function getOpenCodeStatus(options = {}) {
   const opencodeDir = options.opencodeDir ?? getOpenCodeStateDir();
   const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
   const activeSessions = new Set();
+  const activeShells = new Set();
   let instancesCount = 0;
 
   let entries = [];
@@ -51,11 +52,21 @@ export function getOpenCodeStatus(options = {}) {
     for (const sessionID of snapshot.sessions) {
       if (typeof sessionID === "string") activeSessions.add(sessionID);
     }
+    // Older snapshots have no shells field. Treat them as zero known Shells.
+    // Count only well-formed Shell IDs from live instances with active Sessions.
+    if (snapshot.sessions.length && Array.isArray(snapshot.shells)) {
+      for (const shellID of snapshot.shells) {
+        if (typeof shellID === "string" && shellID.startsWith("sh_")) {
+          activeShells.add(shellID);
+        }
+      }
+    }
   }
 
   return {
     working: activeSessions.size > 0,
     instancesCount,
     activeSessions: [...activeSessions],
+    activeShells: [...activeShells],
   };
 }
