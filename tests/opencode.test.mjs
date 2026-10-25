@@ -143,6 +143,82 @@ test("a discovered running shell stays awake until it ends", async (t) => {
   await waitFor(() => !app.status().working, "the ended shell clears");
 });
 
+
+test("a background shell keeps its Session active after foreground work ends and /new is idle", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("session.execution.started", { sessionID: "ses_a" });
+  await waitFor(() => app.status().working, "foreground task starts");
+  mock.emit("shell.created", {
+    info: { id: "sh_download", status: "running", metadata: { sessionID: "ses_a" } },
+  });
+  mock.emit("session.execution.succeeded", { sessionID: "ses_a" });
+  mock.emit("session.created", { sessionID: "ses_b" }); // /new focuses an idle Session B
+  await waitFor(() => app.status().activeSessions.length === 1, "only the background shell is active");
+  assert.deepEqual(app.status().activeSessions, ["ses_a"], "shell owner stays active, not focused B");
+  mock.emit("shell.exited", { id: "sh_download", status: "exited", exit: 0 });
+  await waitFor(() => !app.status().working, "background download completion releases wake");
+});
+
+test("global and Session shell events deduplicate by shell ID and count Sessions, not tasks", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("shell.created", {
+    info: { id: "sh_a", status: "running", metadata: { sessionID: "ses_one" } },
+  });
+  mock.emit("session.shell.started", { sessionID: "ses_one", shell: { id: "sh_a" } });
+  mock.emit("shell.created", {
+    info: { id: "sh_b", status: "running", metadata: { sessionID: "ses_one" } },
+  });
+  mock.emit("shell.created", {
+    info: { id: "sh_unrelated", status: "running", metadata: {} },
+  });
+  await waitFor(() => app.status().working, "running shells appear");
+  assert.deepEqual(app.status().activeSessions, ["ses_one"]);
+  mock.emit("shell.exited", { id: "sh_a", status: "exited" });
+  await sleep(100);
+  assert.equal(app.status().working, true, "one remaining shell keeps Session active");
+  mock.emit("session.shell.ended", { sessionID: "ses_one", shell: { id: "sh_b" } });
+  await waitFor(() => !app.status().working, "last shell finishing clears activity");
+  mock.emit("shell.deleted", { id: "sh_b" }); // duplicate terminal event is harmless
+  await sleep(50);
+  assert.equal(app.status().activeSessions.length, 0);
+});
+
+test("background shells survive event-stream reconnect and are removed by terminal events", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("shell.created", {
+    info: { id: "sh_long", status: "running", metadata: { sessionID: "ses_long" } },
+  });
+  await waitFor(() => app.status().working, "shell started");
+  mock.disconnect();
+  await waitFor(() => mock.count() >= 2, "stream reconnects");
+  assert.deepEqual(app.status().activeSessions, ["ses_long"]);
+  mock.emit("shell.deleted", { id: "sh_long" });
+  await waitFor(() => !app.status().working, "shell removed after reconnect");
+});
+
+test("Session deletion clears background shells without interfering with unrelated Sessions", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("shell.created", {
+    info: { id: "sh_first", status: "running", metadata: { sessionID: "ses_first" } },
+  });
+  mock.emit("shell.created", {
+    info: { id: "sh_second", status: "running", metadata: { sessionID: "ses_second" } },
+  });
+  await waitFor(() => app.status().activeSessions.length === 2, "two Sessions have shells");
+  mock.emit("session.deleted", { sessionID: "ses_first" });
+  await waitFor(() => app.status().activeSessions.length === 1, "deleted Session removed");
+  assert.deepEqual(app.status().activeSessions, ["ses_second"]);
+  mock.emit("shell.exited", { id: "sh_first", status: "exited" });
+  await sleep(50);
+  assert.deepEqual(app.status().activeSessions, ["ses_second"]);
+  mock.emit("shell.exited", { id: "sh_second", status: "exited" });
+  await waitFor(() => !app.status().working, "remaining shell ends");
+});
+
 test("instances retry failed writes in silence and clean up only their own snapshot", async (t) => {
   const mock = createContext();
   const dir = tempDir(t);
