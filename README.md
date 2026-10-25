@@ -12,6 +12,9 @@ Agent Keep Awake prevents your Mac from idling to sleep while a Herdr agent or a
 
 ## Overview
 
+<img width="900" alt="Agent Keep Awake demo" src="https://github.com/user-attachments/assets/b4687a08-546c-4736-a5df-3332a47c8bdf" />
+
+
 Herdr normally reports the state of the selected session. An OpenCode session can continue working after you switch to `/new`, even when Herdr shows **Idle**.
 
 Agent Keep Awake keeps sleep prevention separate from that UI state:
