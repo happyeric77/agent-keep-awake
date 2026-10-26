@@ -14,6 +14,8 @@ Agent Keep Awake prevents your Mac from idling to sleep while a Herdr agent or a
 
 <img width="900" alt="Agent Keep Awake demo" src="https://github.com/user-attachments/assets/b4687a08-546c-4736-a5df-3332a47c8bdf" />
 
+*Demo recorded with the v0.2.0 status label; this change shortens the label and adds the background Shell count.*
+
 Herdr normally reports the state of the selected session. An OpenCode session can continue working after you switch to `/new`, even when Herdr shows **Idle**.
 
 Agent Keep Awake keeps sleep prevention separate from that UI state:
@@ -25,7 +27,7 @@ Agent Keep Awake keeps sleep prevention separate from that UI state:
 For example, the top-right status can show:
 
 ```text
-🖥️ OpenCode sessions: 2 active
+🖥️ 2 sessions · 3 shells
 ```
 
 The indicator is global, not tied to whichever workspace or agent you have selected.
@@ -34,7 +36,7 @@ The indicator is global, not tied to whichever workspace or agent you have selec
 
 - **Background-session aware** — keep the Mac awake when an OpenCode session continues working after you switch sessions.
 - **Herdr integration** — also respond to any Herdr pane reporting `working`.
-- **Global activity indicator** — optionally show `🖥️ OpenCode sessions: N active` in Herdr's top tab bar; hide it when no activity is detected.
+- **Global activity indicator** — optionally show `🖥️ 1 session · 2 shells` (counts active Sessions and tracked Shells) in Herdr's top tab bar; hide it when no activity is detected.
 - **Automatic sleep control** — start `caffeinate` when work is detected and stop it when tracked work finishes.
 - **Resilient tracking** — reconnect to OpenCode events, recover recently started work, and ignore snapshots from dead processes.
 - **Small footprint** — Node.js 18+, no npm dependencies, and no additional status daemon.
@@ -110,7 +112,7 @@ Reload the configuration:
 herdr server reload-config
 ```
 
-When active sessions are detected, the right side of the top tab bar shows `🖥️ OpenCode sessions: N active`. When none are detected, the command produces no output and the indicator disappears. It works regardless of the currently selected Herdr workspace or project.
+When active sessions are detected, the right side of the top tab bar shows a compact count, such as `OpenCode 🖥️ 1 session · 2 shells`. The Shell count covers known OpenCode-managed Shells, deduplicated by ID across live-process snapshots, not arbitrary detached OS processes. When no Sessions are detected, the command produces no output and the indicator disappears. It works regardless of the currently selected Herdr workspace or project.
 
 The status command reads the same snapshots as the daemon, but runs independently: a display-command failure cannot change sleep prevention. If using a custom `OPENCODE_STATE_DIR`, also make it available to the status command's environment.
 
@@ -147,7 +149,7 @@ delivery = "herdr"
 1. Every 15 seconds by default, the daemon queries `herdr pane list` for panes reporting `working`.
 2. When OpenCode integration is enabled, an event subscriber tracks executions, running shells, and compaction across sessions. Each plugin instance writes a small atomic snapshot containing its PID and active session IDs.
 3. The daemon combines **Herdr working OR OpenCode working** and holds `caffeinate -i -s` (plus `-d` by default) while work is detected. A `blocked` Herdr pane does not count as working.
-4. The tab-bar status command deduplicates active session IDs across live-process snapshots. It does not write pane metadata or override Herdr's native agent status.
+4. The tab-bar status command deduplicates active Session and known Shell IDs across live-process snapshots. It does not write pane metadata or override Herdr's native agent status.
 
 The OpenCode tracker attempts to recover missed starts by inspecting the ten newest sessions after connecting or reconnecting. It does not expire ongoing work merely because events are temporarily silent.
 
@@ -173,7 +175,7 @@ OpenCode does not read Herdr's plugin `.env` automatically.
 
 ## Limitations & Safety
 
-- **Best-effort activity:** missed completion events may leave a session marked active until deletion or process exit. Missed starts outside the newest-ten recovery window can go undetected until another event arrives. The tab-bar count inherits these limits.
+- **Best-effort activity:** missed completion events may leave a Session or Shell marked active until deletion or process exit. Missed starts outside the newest-ten recovery window can go undetected until another event arrives. The tab-bar counts inherit these limits, and older snapshots without Shell IDs report zero known Shells.
 - **Global, not pane-local:** the activity count does not identify which Herdr pane owns a session. Herdr may display **Idle** for the selected session while a background OpenCode session still keeps the Mac awake.
 - **Opt-in OpenCode coverage:** only OpenCode processes loading this integration write snapshots. Without it, sleep prevention relies on Herdr pane status.
 - **macOS sleep behavior:** closing the laptop lid can still put the Mac to sleep. On battery power, macOS ignores `caffeinate -s`; idle-sleep prevention is the relevant protection.

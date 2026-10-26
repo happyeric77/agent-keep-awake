@@ -24,10 +24,10 @@ function defaultStateDir() {
   return join(stateHome, "herdr-keep-awake", "opencode");
 }
 
-function writeSnapshot(filePath, pid, sessions) {
+function writeSnapshot(filePath, pid, sessions, shells) {
   const tmpPath = `${filePath}.tmp.${randomUUID()}`;
   try {
-    writeFileSync(tmpPath, JSON.stringify({ pid, sessions }), "utf8");
+    writeFileSync(tmpPath, JSON.stringify({ pid, sessions, shells }), "utf8");
     renameSync(tmpPath, filePath);
     return true;
   } catch {
@@ -55,6 +55,7 @@ export const plugin = {
     );
 
     const sessions = new Map();
+    const shellOwners = new Map(); // Global Shell events do not repeat sessionID on exit.
     let disposed = false;
     let controller = null;
     let cancelDelay = null;
@@ -63,9 +64,12 @@ export const plugin = {
     const publish = () => {
       if (disposed) return;
       const ids = [...sessions].filter(([, a]) => isActive(a)).map(([id]) => id).sort();
-      const key = ids.join(",");
+      const shells = [...shellOwners.keys()].sort();
+      // Publish even when the number of active Sessions stays the same:
+      // one Session can start or finish multiple background Shells.
+      const key = JSON.stringify([ids, shells]);
       if (key === published) return;
-      if (writeSnapshot(stateFile, pid, ids)) published = key;
+      if (writeSnapshot(stateFile, pid, ids, shells)) published = key;
     };
 
     // A session found after (re)connecting may have started while events were
@@ -113,19 +117,64 @@ export const plugin = {
 
     const handleEvent = (event) => {
       const { type, data } = event ?? {};
+
+      // Background tool shells emit location-scoped events even after the
+      // originating Session execution has become idle. Their metadata links
+      // the Shell ID to a Session; terminal events contain only the Shell ID.
+      if (type === "shell.created") {
+        const shell = data?.info;
+        const sessionID = shell?.metadata?.sessionID;
+        if (
+          typeof shell?.id !== "string" || !shell.id.startsWith("sh_") ||
+          shell.status !== "running" ||
+          typeof sessionID !== "string" || !sessionID.startsWith("ses")
+        ) return;
+        const activity = sessions.get(sessionID) ?? newActivity();
+        activity.shells.add(shell.id);
+        activity.provisional = false;
+        sessions.set(sessionID, activity);
+        shellOwners.set(shell.id, sessionID);
+        return;
+      }
+      if (type === "shell.exited" || type === "shell.deleted") {
+        const id = data?.id;
+        const sessionID = shellOwners.get(id);
+        if (!sessionID) return;
+        shellOwners.delete(id);
+        const activity = sessions.get(sessionID);
+        if (!activity) return;
+        activity.shells.delete(id);
+        if (!isActive(activity)) sessions.delete(sessionID);
+        return;
+      }
+
       const sessionID = data?.sessionID;
       if (typeof type !== "string" || typeof sessionID !== "string") return;
       if (!sessionID.startsWith("ses")) return;
       if (type === "session.deleted") {
         sessions.delete(sessionID);
+        for (const [id, owner] of shellOwners) {
+          if (owner === sessionID) shellOwners.delete(id);
+        }
         return;
       }
 
       const activity = sessions.get(sessionID) ?? newActivity();
-      if (type === "session.shell.started") activity.shells.add(data.shell?.id ?? null);
-      else if (type === "session.shell.ended" || type === "session.shell.failed") {
-        if (data.shell?.id) activity.shells.delete(data.shell.id);
-        else activity.shells.clear();
+      if (type === "session.shell.started") {
+        const id = data.shell?.id;
+        if (typeof id !== "string" || !id.startsWith("sh_")) return;
+        activity.shells.add(id);
+        shellOwners.set(id, sessionID);
+      } else if (type === "session.shell.ended" || type === "session.shell.failed") {
+        if (data.shell?.id) {
+          activity.shells.delete(data.shell.id);
+          shellOwners.delete(data.shell.id);
+        } else {
+          activity.shells.clear();
+          for (const [id, owner] of shellOwners) {
+            if (owner === sessionID) shellOwners.delete(id);
+          }
+        }
       } else if (COMPACTION_ACTIVE.has(type)) activity.compaction = true;
       else if (COMPACTION_ENDED.has(type)) activity.compaction = false;
       else if (EXECUTION_ENDED.has(type)) {

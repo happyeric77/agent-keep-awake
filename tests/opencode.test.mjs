@@ -143,6 +143,109 @@ test("a discovered running shell stays awake until it ends", async (t) => {
   await waitFor(() => !app.status().working, "the ended shell clears");
 });
 
+
+test("a background shell keeps its Session active after foreground work ends and /new is idle", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("session.execution.started", { sessionID: "ses_a" });
+  await waitFor(() => app.status().working, "foreground task starts");
+  mock.emit("shell.created", {
+    info: { id: "sh_download", status: "running", metadata: { sessionID: "ses_a" } },
+  });
+  mock.emit("session.execution.succeeded", { sessionID: "ses_a" });
+  mock.emit("session.created", { sessionID: "ses_b" }); // /new focuses an idle Session B
+  await waitFor(() => app.status().activeSessions.length === 1, "only the background shell is active");
+  assert.deepEqual(app.status().activeSessions, ["ses_a"], "shell owner stays active, not focused B");
+  mock.emit("shell.exited", { id: "sh_download", status: "exited", exit: 0 });
+  await waitFor(() => !app.status().working, "background download completion releases wake");
+});
+
+test("global and Session shell events deduplicate by shell ID and count Sessions, not tasks", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("shell.created", {
+    info: { id: "sh_a", status: "running", metadata: { sessionID: "ses_one" } },
+  });
+  mock.emit("session.shell.started", { sessionID: "ses_one", shell: { id: "sh_a" } });
+  mock.emit("shell.created", {
+    info: { id: "sh_b", status: "running", metadata: { sessionID: "ses_one" } },
+  });
+  mock.emit("shell.created", {
+    info: { id: "sh_unrelated", status: "running", metadata: {} },
+  });
+  await waitFor(() => app.status().working, "running shells appear");
+  assert.deepEqual(app.status().activeSessions, ["ses_one"]);
+  mock.emit("shell.exited", { id: "sh_a", status: "exited" });
+  await sleep(100);
+  assert.equal(app.status().working, true, "one remaining shell keeps Session active");
+  mock.emit("session.shell.ended", { sessionID: "ses_one", shell: { id: "sh_b" } });
+  await waitFor(() => !app.status().working, "last shell finishing clears activity");
+  mock.emit("shell.deleted", { id: "sh_b" }); // duplicate terminal event is harmless
+  await sleep(50);
+  assert.equal(app.status().activeSessions.length, 0);
+});
+
+test("background shells survive event-stream reconnect and are removed by terminal events", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("shell.created", {
+    info: { id: "sh_long", status: "running", metadata: { sessionID: "ses_long" } },
+  });
+  await waitFor(() => app.status().working, "shell started");
+  mock.disconnect();
+  await waitFor(() => mock.count() >= 2, "stream reconnects");
+  assert.deepEqual(app.status().activeSessions, ["ses_long"]);
+  mock.emit("shell.deleted", { id: "sh_long" });
+  await waitFor(() => !app.status().working, "shell removed after reconnect");
+});
+
+test("Session deletion clears background shells without interfering with unrelated Sessions", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("shell.created", {
+    info: { id: "sh_first", status: "running", metadata: { sessionID: "ses_first" } },
+  });
+  mock.emit("shell.created", {
+    info: { id: "sh_second", status: "running", metadata: { sessionID: "ses_second" } },
+  });
+  await waitFor(() => app.status().activeSessions.length === 2, "two Sessions have shells");
+  mock.emit("session.deleted", { sessionID: "ses_first" });
+  await waitFor(() => app.status().activeSessions.length === 1, "deleted Session removed");
+  assert.deepEqual(app.status().activeSessions, ["ses_second"]);
+  mock.emit("shell.exited", { id: "sh_first", status: "exited" });
+  await sleep(50);
+  assert.deepEqual(app.status().activeSessions, ["ses_second"]);
+  mock.emit("shell.exited", { id: "sh_second", status: "exited" });
+  await waitFor(() => !app.status().working, "remaining shell ends");
+});
+
+test("shell count updates without changing the active Session count", async (t) => {
+  const mock = createContext();
+  const app = await setup(t, mock);
+  mock.emit("session.execution.started", { sessionID: "ses_download" });
+  await waitFor(() => app.status().activeSessions.length === 1, "Session starts");
+  assert.deepEqual(app.status().activeShells, []);
+
+  mock.emit("shell.created", {
+    info: { id: "sh_a", status: "running", metadata: { sessionID: "ses_download" } },
+  });
+  await waitFor(() => app.status().activeShells.length === 1, "first Shell counted");
+  mock.emit("shell.created", {
+    info: { id: "sh_b", status: "running", metadata: { sessionID: "ses_download" } },
+  });
+  mock.emit("session.execution.succeeded", { sessionID: "ses_download" });
+  await waitFor(() => app.status().activeShells.length === 2, "second Shell counted");
+  assert.deepEqual(app.status().activeSessions, ["ses_download"]);
+  assert.deepEqual(app.status().activeShells, ["sh_a", "sh_b"]);
+
+  mock.emit("shell.exited", { id: "sh_a", status: "exited" });
+  await waitFor(() => app.status().activeShells.length === 1, "one Shell remains");
+  assert.deepEqual(app.status().activeSessions, ["ses_download"]);
+  mock.emit("shell.exited", { id: "sh_b", status: "exited" });
+  await waitFor(() => !app.status().working, "Session and Shell counts clear");
+  assert.deepEqual(app.status().activeShells, []);
+});
+
 test("instances retry failed writes in silence and clean up only their own snapshot", async (t) => {
   const mock = createContext();
   const dir = tempDir(t);
@@ -183,17 +286,23 @@ test("status command counts unique live sessions globally and prints nothing whe
     assert.equal(result.stderr, "");
     return result.stdout;
   };
-  const snapshot = (name, sessions) =>
-    writeFileSync(join(dir, name), JSON.stringify({ pid: process.pid, sessions }));
+  const snapshot = (name, sessions, shells = []) =>
+    writeFileSync(join(dir, name), JSON.stringify({ pid: process.pid, sessions, shells }));
 
   assert.equal(run(), "");
-  snapshot("a.json", ["ses_a"]);
-  snapshot("b.json", ["ses_a"]);
+  snapshot("a.json", ["ses_a"], ["sh_a"]);
+  snapshot("b.json", ["ses_a"], ["sh_a"]);
   writeFileSync(join(dir, "broken.json"), "{");
   writeFileSync(join(dir, "dead.json"), JSON.stringify({ pid: 2147483647, sessions: ["ses_dead"] }));
-  assert.equal(run(), "🖥️ OpenCode sessions: 1 active\n");
-  snapshot("b.json", ["ses_a", "ses_b", "ses_c"]);
-  assert.equal(run(), "🖥️ OpenCode sessions: 3 active\n");
+  assert.equal(run(), "OpenCode 🖥️ 1 session · 1 shell\n");
+  snapshot("b.json", ["ses_a", "ses_b", "ses_c"], ["sh_a", "sh_b", "sh_c"]);
+  assert.equal(run(), "OpenCode 🖥️ 3 sessions · 3 shells\n");
+  // Legacy files contain only sessions, and dead/malformed shells do not count.
+  snapshot("a.json", ["ses_a"]);
+  snapshot("b.json", ["ses_a"], ["invalid", "sh_ok"]);
+  assert.equal(run(), "OpenCode 🖥️ 1 session · 1 shell\n");
+  snapshot("b.json", ["ses_a"], []);
+  assert.equal(run(), "OpenCode 🖥️ 1 session · 0 shells\n");
   snapshot("a.json", []);
   snapshot("b.json", []);
   assert.equal(run(), "");
